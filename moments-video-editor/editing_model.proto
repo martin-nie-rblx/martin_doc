@@ -568,27 +568,30 @@ message Color {
 // byte locations (URLs/paths). Clients resolve the actual media through the
 // global asset resolution system keyed by asset_id; that system is the single
 // source of truth for where the bytes live and how to fetch them.
+//
+// Crucially, the model also stores NO rendition-specific properties (pixel
+// width/height, mime type, codec, bitrate, file size). On the consumption
+// side, playback resolution/format is adapted to the user's network, so those
+// values differ per delivered rendition and are not fixed attributes of the
+// edit. Geometry stays resolution-independent via normalized coordinates and
+// FitMode; the player applies the edit to whatever rendition it resolves.
 message MediaAsset {
   // Opaque global asset id. Resolve via the asset resolution system to obtain
-  // the playable/renderable media.
+  // the appropriate (network-adapted) playable/renderable rendition.
   string asset_id = 1;
   AssetType type = 2;
 
-  // Intrinsic media properties are OPTIONAL cached hints, populated from the
-  // resolver to let the editor lay out the timeline without resolving every
-  // asset up front. The resolver remains authoritative.
-  int32 width = 3;            // px (video/image)
-  int32 height = 4;
-  int64 duration_ms = 5;      // video/audio
-  double source_fps = 6;
-  string mime_type = 7;
-  int64 size_bytes = 8;
+  // Intrinsic, RENDITION-INDEPENDENT content duration (video/audio). Optional
+  // cached hint from the resolver, used for trim bounds and default clip
+  // length. Unlike resolution/format, content duration is the same across
+  // renditions. The resolver remains authoritative.
+  int64 duration_ms = 3;
 
   // For Roblox-native sources: which experience/capture this came from.
-  AssetOrigin origin = 9;
+  AssetOrigin origin = 4;
 
   // Optional low-res poster/thumbnail, itself an asset id resolved the same way.
-  string thumbnail_asset_id = 10;
+  string thumbnail_asset_id = 5;
 }
 
 enum AssetType {

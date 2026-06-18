@@ -84,9 +84,14 @@ animations.
 1. **Image posts / slideshows** — modeled as `MediaSegment`s with `IMAGE`
    assets on the main track (each with its own duration). Confirm whether
    slideshow transitions need a dedicated type.
-2. **Asset storage** — the model stores **no byte locations**. `MediaAsset` is a
-   pure reference (`asset_id` + optional cached hints); clients resolve media
-   through the global asset resolution system, which is the source of truth.
+2. **Asset storage** — the model stores **no byte locations** and **no
+   rendition-specific properties** (pixel size, mime/codec, bitrate, file
+   size). `MediaAsset` is a pure reference (`asset_id` + rendition-independent
+   hints like `duration_ms`); clients resolve media through the global asset
+   resolution system, which is the source of truth. On the consumption side,
+   playback resolution/format is network-adapted, so geometry stays
+   resolution-independent (normalized coordinates + `FitMode`) and the player
+   applies the edit to whatever rendition it resolves.
 3. **TTS caching** — assumes synthesized audio is materialized to an asset for
    playback determinism; confirm whether on-the-fly synthesis is preferred.
 4. **Server vs client rendering** — schema is render-target-agnostic; confirm
