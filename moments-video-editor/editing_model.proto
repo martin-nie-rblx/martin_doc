@@ -1,0 +1,613 @@
+// =============================================================================
+// Roblox Moments — Video Editor Data Model
+// =============================================================================
+//
+// This schema describes a complete, serializable representation of a single
+// editing session ("project"). It is designed to be:
+//
+//   * Declarative   — the document fully describes the rendered output; a
+//                     renderer can reproduce the final video from this alone.
+//   * Layer/Track   — based, like every modern NLE (non-linear editor), so that
+//                     stitch / overlay / music / caption / sticker all compose
+//                     naturally on a shared timeline.
+//   * Non-destructive — source media is referenced, never mutated. Trims,
+//                     speed, volume, filters, transforms are all parameters.
+//   * Extensible    — new tools are added as new variants of the `Element`
+//                     oneof or new `Effect` types without breaking old clients.
+//
+// Time convention: all times/durations are int64 MILLISECONDS on the project
+// timeline unless noted. Milliseconds (vs. float seconds) keep keyframes and
+// trims exact and avoid drift across clients.
+//
+// Coordinate convention: overlay geometry uses NORMALIZED coordinates in the
+// range [0,1] relative to the output canvas (0,0 = top-left, 1,1 =
+// bottom-right). This keeps a project resolution-independent.
+// =============================================================================
+
+syntax = "proto3";
+
+package roblox.moments.editor.v1;
+
+option java_package = "com.roblox.moments.editor.v1";
+option java_multiple_files = true;
+option go_package = "github.com/Roblox/moments/editor/v1;editorv1";
+
+// =============================================================================
+// Top-level document
+// =============================================================================
+
+// EditProject is the root document for one editing session. It is the unit that
+// gets autosaved, versioned, and finally rendered/published.
+message EditProject {
+  string project_id = 1;
+  string owner_user_id = 2;
+
+  // Free-form title shown in the editor UI (not the published caption).
+  string title = 3;
+
+  // Monotonic schema version so clients can migrate older documents.
+  int32 schema_version = 4;
+
+  // Output / canvas configuration the timeline is composited into.
+  Canvas canvas = 5;
+
+  // The arrangement of all content over time.
+  Timeline timeline = 6;
+
+  // Asset library: every source media referenced by the timeline lives here,
+  // keyed by asset_id. Clips reference assets by id so the same source can be
+  // used in multiple places without duplication.
+  map<string, MediaAsset> assets = 7;
+
+  // Optional draft of what gets attached when the Moment is published.
+  PublishMetadata publish = 8;
+
+  EditTimestamps timestamps = 9;
+
+  // Reserved escape hatch for experimental fields during development.
+  map<string, string> extra = 100;
+}
+
+message EditTimestamps {
+  int64 created_at_unix_ms = 1;
+  int64 updated_at_unix_ms = 2;
+  // Client/app version that last wrote the document (for debugging migrations).
+  string last_editor_app_version = 3;
+}
+
+// What the user is publishing once editing is done.
+message PublishMetadata {
+  string description = 1;
+  repeated string hashtags = 2;
+  repeated string mentioned_user_ids = 3;
+  // Cover/thumbnail chosen by the user (timeline timestamp or explicit asset).
+  oneof thumbnail {
+    int64 thumbnail_timeline_ms = 4;
+    string thumbnail_asset_id = 5;
+  }
+  Visibility visibility = 6;
+}
+
+enum Visibility {
+  VISIBILITY_UNSPECIFIED = 0;
+  VISIBILITY_PUBLIC = 1;
+  VISIBILITY_FRIENDS = 2;
+  VISIBILITY_PRIVATE = 3;
+}
+
+// =============================================================================
+// Canvas / output settings
+// =============================================================================
+
+message Canvas {
+  // Final pixel dimensions of the rendered output.
+  int32 width = 1;
+  int32 height = 2;
+
+  // Output frame rate (frames per second), e.g. 30 or 60.
+  double fps = 3;
+
+  AspectRatio aspect_ratio = 4;
+
+  // Background shown where no opaque content covers the canvas (e.g. letterbox
+  // bars, or behind a transparent sticker-only project).
+  Color background_color = 5;
+
+  // For pure-image "posts" with no motion, the renderer can treat the project
+  // as a still; duration still comes from the timeline.
+  PostType post_type = 6;
+}
+
+enum PostType {
+  POST_TYPE_UNSPECIFIED = 0;
+  POST_TYPE_VIDEO = 1;   // motion timeline
+  POST_TYPE_IMAGE = 2;   // single/slideshow image post
+}
+
+enum AspectRatio {
+  ASPECT_RATIO_UNSPECIFIED = 0;
+  ASPECT_RATIO_9_16 = 1;   // vertical (default for Moments)
+  ASPECT_RATIO_1_1 = 2;    // square
+  ASPECT_RATIO_16_9 = 3;   // landscape
+  ASPECT_RATIO_4_5 = 4;    // portrait feed
+}
+
+// =============================================================================
+// Timeline / Track / Element
+// =============================================================================
+
+// The Timeline is an ordered set of layered tracks. Total duration is derived
+// from the content but cached here for quick UI/seek-bar rendering.
+message Timeline {
+  int64 duration_ms = 1;
+  repeated Track tracks = 2;
+}
+
+// A Track is a horizontal lane of non-overlapping (per visual track) or
+// overlapping (audio/overlay) elements. Higher z_order renders on top.
+message Track {
+  string track_id = 1;
+  TrackKind kind = 2;
+
+  // Render/compositing order across tracks. Higher = closer to the viewer.
+  int32 z_order = 3;
+
+  // Track-level controls.
+  bool muted = 4;     // audio tracks
+  bool hidden = 5;    // visual tracks (preview only; not exported if true)
+  bool locked = 6;    // UI: prevents edits
+
+  // Master volume multiplier applied to all audio elements on this track.
+  double volume = 7;  // 1.0 = unchanged
+
+  repeated Element elements = 8;
+}
+
+enum TrackKind {
+  TRACK_KIND_UNSPECIFIED = 0;
+  // Primary video/image lane. Sequential clips here = the "stitch".
+  TRACK_KIND_MAIN_VIDEO = 1;
+  // Picture-in-picture / B-roll visual overlays above the main video.
+  TRACK_KIND_OVERLAY_VIDEO = 2;
+  TRACK_KIND_AUDIO = 3;      // music / sfx / voiceover / tts
+  TRACK_KIND_CAPTION = 4;    // text & subtitles
+  TRACK_KIND_STICKER = 5;    // stickers / emoji / GIF overlays
+}
+
+// An Element is one placed item on a track. Its `oneof content` selects which
+// editing tool produced it. Every element shares timeline placement and a
+// stack of effects.
+message Element {
+  string element_id = 1;
+
+  // Where on the project timeline this element lives and how long it lasts.
+  TimeRange timeline_range = 2;
+
+  // Stack of effects/filters applied to this element, in order.
+  repeated Effect effects = 3;
+
+  // Animated enter/exit (fade, slide, pop). Independent of clip transitions.
+  Animation enter_animation = 4;
+  Animation exit_animation = 5;
+
+  oneof content {
+    MediaSegment media = 10;     // video or image clip (stitch building block)
+    AudioSegment audio = 11;     // music, voiceover, recorded sfx
+    TtsSegment tts = 12;         // text-to-speech generated audio
+    Caption caption = 13;        // text / subtitle overlay
+    Sticker sticker = 14;        // image / animated / emoji overlay
+    TextOverlay text = 15;       // free-form styled text (titles, etc.)
+  }
+}
+
+// A half-open interval [start_ms, start_ms + duration_ms) on the project
+// timeline.
+message TimeRange {
+  int64 start_ms = 1;
+  int64 duration_ms = 2;
+}
+
+// =============================================================================
+// Visual content — MediaSegment (video / image clips, i.e. the "stitch")
+// =============================================================================
+
+// A MediaSegment places a portion of a source video or image onto a visual
+// track. Putting several of these end-to-end on TRACK_KIND_MAIN_VIDEO is how a
+// "stitch" is represented.
+message MediaSegment {
+  // References EditProject.assets[asset_id].
+  string asset_id = 1;
+
+  // For video: the in/out trim within the SOURCE media (source time, not
+  // timeline time). For images this is ignored.
+  SourceTrim source_trim = 2;
+
+  // Playback speed multiplier for video (2.0 = 2x fast, 0.5 = slow-mo).
+  // The resulting duration on the timeline is governed by timeline_range; speed
+  // determines how much source is consumed.
+  double speed = 3;          // default 1.0
+
+  bool reverse = 4;          // play source backwards
+
+  // Geometry within the canvas (PiP placement, scale, rotation, crop).
+  Transform transform = 5;
+  CropRect crop = 6;
+
+  // How the frame fits the canvas when this is a full-frame clip.
+  FitMode fit_mode = 7;
+
+  // Audio that ships inside the video file.
+  AudioProperties embedded_audio = 8;
+
+  // Transitions to the neighboring clip on the same track (stitch joins).
+  Transition transition_in = 9;
+  Transition transition_out = 10;
+}
+
+// Trim of source media (video). Half-open [in_point_ms, out_point_ms).
+message SourceTrim {
+  int64 in_point_ms = 1;
+  int64 out_point_ms = 2;
+}
+
+message CropRect {
+  // Normalized [0,1] crop window relative to the source frame.
+  double x = 1;
+  double y = 2;
+  double width = 3;
+  double height = 4;
+}
+
+enum FitMode {
+  FIT_MODE_UNSPECIFIED = 0;
+  FIT_MODE_CONTAIN = 1;  // letterbox, whole frame visible
+  FIT_MODE_COVER = 2;    // fill canvas, may crop
+  FIT_MODE_STRETCH = 3;  // distort to fill
+}
+
+// Transition between two adjacent clips (or in/out of a single clip).
+message Transition {
+  TransitionType type = 1;
+  int64 duration_ms = 2;
+}
+
+enum TransitionType {
+  TRANSITION_TYPE_UNSPECIFIED = 0;
+  TRANSITION_TYPE_NONE = 1;
+  TRANSITION_TYPE_CROSSFADE = 2;
+  TRANSITION_TYPE_FADE_BLACK = 3;
+  TRANSITION_TYPE_SLIDE = 4;
+  TRANSITION_TYPE_WIPE = 5;
+  TRANSITION_TYPE_ZOOM = 6;
+}
+
+// =============================================================================
+// Audio content — music, voiceover, sfx, and TTS
+// =============================================================================
+
+// AudioSegment places sourced audio (a music track, an uploaded sound effect,
+// or a recorded voiceover) onto an audio track.
+message AudioSegment {
+  string asset_id = 1;          // references EditProject.assets[asset_id]
+  AudioKind kind = 2;
+  SourceTrim source_trim = 3;   // trim within the source audio
+  double speed = 4;             // default 1.0
+  AudioProperties properties = 5;
+
+  // Title/attribution to display (e.g. licensed music track name + artist).
+  string display_title = 6;
+}
+
+enum AudioKind {
+  AUDIO_KIND_UNSPECIFIED = 0;
+  AUDIO_KIND_MUSIC = 1;        // background music
+  AUDIO_KIND_VOICEOVER = 2;    // user-recorded narration
+  AUDIO_KIND_SOUND_EFFECT = 3; // sfx
+  AUDIO_KIND_ORIGINAL = 4;     // detached original audio from a video clip
+}
+
+// Shared audio mixing properties (used by AudioSegment, TtsSegment, and the
+// embedded audio of a MediaSegment).
+message AudioProperties {
+  double volume = 1;       // 0.0 = silent, 1.0 = unity, >1 = boost
+  bool muted = 2;
+  int64 fade_in_ms = 3;
+  int64 fade_out_ms = 4;
+  // Optional ducking: lower this audio when another track (e.g. voiceover)
+  // is active. Empty = no ducking.
+  Ducking ducking = 5;
+}
+
+// Auto-lower this audio when the referenced track has active content.
+message Ducking {
+  string trigger_track_id = 1;
+  double duck_to_volume = 2;   // e.g. 0.2
+  int64 attack_ms = 3;
+  int64 release_ms = 4;
+}
+
+// TtsSegment generates audio from text. The generated audio may be cached as an
+// asset (cached_asset_id) once synthesized so the renderer/playback reuses it.
+message TtsSegment {
+  string text = 1;
+  string voice_id = 2;        // catalog voice identifier
+  double speaking_rate = 3;   // 1.0 = normal
+  double pitch = 4;           // semitone-ish offset, 0 = default
+  string language_code = 5;   // BCP-47, e.g. "en-US"
+  AudioProperties properties = 6;
+
+  // Populated after synthesis; lets clients avoid re-generating audio.
+  string cached_asset_id = 7;
+}
+
+// =============================================================================
+// Text content — Captions & free-form Text overlays
+// =============================================================================
+
+// Caption is a text overlay, optionally a timed subtitle. Multiple sequential
+// captions on a TRACK_KIND_CAPTION track form a subtitle track; one long-lived
+// caption is a sticker-like text label.
+message Caption {
+  string text = 1;
+  TextStyle style = 2;
+  Transform transform = 3;     // position/scale/rotation on canvas
+
+  // Optional link to an audio element this caption transcribes, enabling
+  // auto-caption / karaoke highlighting and resync.
+  string source_audio_element_id = 4;
+
+  // Optional per-word timing for karaoke-style highlighting.
+  repeated WordTiming word_timings = 5;
+
+  CaptionPreset preset = 6;    // visual template (e.g. "TikTok bold")
+}
+
+message WordTiming {
+  string word = 1;
+  int64 start_ms = 2;   // relative to the element's timeline_range start
+  int64 end_ms = 3;
+}
+
+enum CaptionPreset {
+  CAPTION_PRESET_UNSPECIFIED = 0;
+  CAPTION_PRESET_PLAIN = 1;
+  CAPTION_PRESET_BOLD_HIGHLIGHT = 2;
+  CAPTION_PRESET_KARAOKE = 3;
+  CAPTION_PRESET_TYPEWRITER = 4;
+}
+
+// TextOverlay is free-form styled text (titles, watermarks) not tied to audio.
+message TextOverlay {
+  string text = 1;
+  TextStyle style = 2;
+  Transform transform = 3;
+}
+
+message TextStyle {
+  string font_family = 1;
+  double font_size = 2;        // in canvas-normalized units (fraction of height)
+  Color text_color = 3;
+  Color background_color = 4;  // text box fill; alpha 0 = none
+  bool bold = 5;
+  bool italic = 6;
+  bool underline = 7;
+  TextAlign align = 8;
+  TextStroke stroke = 9;
+  TextShadow shadow = 10;
+  double line_height = 11;     // multiplier
+  double letter_spacing = 12;
+}
+
+message TextStroke {
+  Color color = 1;
+  double width = 2;
+}
+
+message TextShadow {
+  Color color = 1;
+  double blur = 2;
+  Vec2 offset = 3;
+}
+
+enum TextAlign {
+  TEXT_ALIGN_UNSPECIFIED = 0;
+  TEXT_ALIGN_LEFT = 1;
+  TEXT_ALIGN_CENTER = 2;
+  TEXT_ALIGN_RIGHT = 3;
+}
+
+// =============================================================================
+// Stickers
+// =============================================================================
+
+message Sticker {
+  oneof source {
+    string asset_id = 1;       // uploaded/GIF/Lottie/image sticker -> assets[]
+    string catalog_sticker_id = 2; // built-in sticker pack id
+    string emoji = 3;          // unicode emoji rendered as a sticker
+  }
+  Transform transform = 4;
+  StickerKind kind = 5;
+  bool loop = 6;               // for animated stickers shorter than the element
+}
+
+enum StickerKind {
+  STICKER_KIND_UNSPECIFIED = 0;
+  STICKER_KIND_STATIC = 1;   // png/static image
+  STICKER_KIND_ANIMATED = 2; // gif / apng / lottie
+  STICKER_KIND_EMOJI = 3;
+}
+
+// =============================================================================
+// Effects / filters (element-level, stackable)
+// =============================================================================
+
+message Effect {
+  string effect_id = 1;
+  bool enabled = 2;
+  oneof effect {
+    ColorFilter color_filter = 10;
+    Adjustments adjustments = 11;
+    BlurEffect blur = 12;
+    ChromaKey chroma_key = 13;
+    // Generic, named effect for catalog/experimental effects keyed by id +
+    // arbitrary float/string params, so new effects need no schema change.
+    NamedEffect named = 14;
+  }
+}
+
+message ColorFilter {
+  string lut_id = 1;     // named look-up table / preset id
+  double intensity = 2;  // 0..1 blend
+}
+
+message Adjustments {
+  double brightness = 1; // -1..1, 0 = none
+  double contrast = 2;
+  double saturation = 3;
+  double temperature = 4;
+  double vignette = 5;
+  double sharpen = 6;
+}
+
+message BlurEffect {
+  BlurType type = 1;
+  double radius = 2;
+}
+
+enum BlurType {
+  BLUR_TYPE_UNSPECIFIED = 0;
+  BLUR_TYPE_GAUSSIAN = 1;
+  BLUR_TYPE_MOTION = 2;
+  BLUR_TYPE_BACKGROUND = 3; // blur background, keep subject (segmentation)
+}
+
+message ChromaKey {
+  Color key_color = 1;
+  double tolerance = 2;
+  double softness = 3;
+}
+
+message NamedEffect {
+  string name = 1;
+  map<string, double> number_params = 2;
+  map<string, string> string_params = 3;
+}
+
+// =============================================================================
+// Animation & keyframes (enter/exit and animated transforms)
+// =============================================================================
+
+message Animation {
+  AnimationType type = 1;
+  int64 duration_ms = 2;
+  Easing easing = 3;
+}
+
+enum AnimationType {
+  ANIMATION_TYPE_UNSPECIFIED = 0;
+  ANIMATION_TYPE_NONE = 1;
+  ANIMATION_TYPE_FADE = 2;
+  ANIMATION_TYPE_SLIDE_IN = 3;
+  ANIMATION_TYPE_POP = 4;
+  ANIMATION_TYPE_ZOOM = 5;
+  ANIMATION_TYPE_BOUNCE = 6;
+}
+
+enum Easing {
+  EASING_UNSPECIFIED = 0;
+  EASING_LINEAR = 1;
+  EASING_EASE_IN = 2;
+  EASING_EASE_OUT = 3;
+  EASING_EASE_IN_OUT = 4;
+}
+
+// =============================================================================
+// Geometry & shared value types
+// =============================================================================
+
+// Transform places/sizes a visual element on the canvas. Position and the
+// anchor are normalized [0,1]; scale is a multiplier. Optional keyframes make
+// any of these animate over the element's lifetime (e.g. a panning sticker).
+message Transform {
+  Vec2 position = 1;       // normalized canvas position of the anchor point
+  Vec2 anchor = 2;         // normalized anchor within the element (0.5,0.5=center)
+  Vec2 scale = 3;          // 1,1 = native size
+  double rotation_deg = 4;
+  double opacity = 5;      // 0..1
+
+  // Optional keyframe animation overriding the static values above.
+  repeated TransformKeyframe keyframes = 6;
+}
+
+message TransformKeyframe {
+  int64 time_ms = 1;       // relative to element's timeline_range start
+  Vec2 position = 2;
+  Vec2 scale = 3;
+  double rotation_deg = 4;
+  double opacity = 5;
+  Easing easing = 6;
+}
+
+message Vec2 {
+  double x = 1;
+  double y = 2;
+}
+
+// sRGB color with straight alpha, each channel 0..1.
+message Color {
+  double r = 1;
+  double g = 2;
+  double b = 3;
+  double a = 4;
+}
+
+// =============================================================================
+// Media assets (the source library)
+// =============================================================================
+
+message MediaAsset {
+  string asset_id = 1;
+  AssetType type = 2;
+
+  // Where the bytes live. Could be a CDN url, a content-addressed id, or a
+  // local capture path while editing.
+  string uri = 3;
+
+  // Intrinsic media properties (best-effort; filled after probe).
+  int32 width = 4;            // px (video/image)
+  int32 height = 5;
+  int64 duration_ms = 6;      // video/audio
+  double source_fps = 7;
+  string mime_type = 8;
+  int64 size_bytes = 9;
+
+  // For Roblox-native sources: which experience/capture this came from.
+  AssetOrigin origin = 10;
+
+  // A low-res poster/thumbnail asset id for fast UI rendering.
+  string thumbnail_uri = 11;
+}
+
+enum AssetType {
+  ASSET_TYPE_UNSPECIFIED = 0;
+  ASSET_TYPE_VIDEO = 1;
+  ASSET_TYPE_IMAGE = 2;
+  ASSET_TYPE_AUDIO = 3;
+  ASSET_TYPE_LOTTIE = 4;   // animated sticker
+}
+
+message AssetOrigin {
+  AssetSource source = 1;
+  // If captured in-experience, the universe/place it came from.
+  int64 universe_id = 2;
+  int64 place_id = 3;
+}
+
+enum AssetSource {
+  ASSET_SOURCE_UNSPECIFIED = 0;
+  ASSET_SOURCE_CAMERA_ROLL = 1;     // device gallery upload
+  ASSET_SOURCE_IN_EXPERIENCE = 2;   // captured inside a Roblox experience
+  ASSET_SOURCE_CATALOG = 3;         // licensed music / sticker catalog
+  ASSET_SOURCE_TTS = 4;             // generated by text-to-speech
+}
