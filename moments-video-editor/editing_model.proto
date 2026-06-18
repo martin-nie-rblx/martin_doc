@@ -2,8 +2,8 @@
 // Roblox Moments — Video Editor Data Model
 // =============================================================================
 //
-// This schema describes a complete, serializable representation of a single
-// editing session ("project"). It is designed to be:
+// This schema is a complete, serializable representation of a Moment's edit.
+// It is designed to be:
 //
 //   * Declarative   — the document fully describes the rendered output; a
 //                     renderer can reproduce the final video from this alone.
@@ -15,13 +15,45 @@
 //   * Extensible    — new tools are added as new variants of the `Element`
 //                     oneof or new `Effect` types without breaking old clients.
 //
+// ---------------------------------------------------------------------------
+// ONE MODEL, TWO PROFILES
+// ---------------------------------------------------------------------------
+// The same messages serve both sides of the pipeline (`Post.profile`):
+//
+//   * AUTHORING (creation side) — the full editor-SDK document. Media may still
+//     be LOCAL, unuploaded files; generated content (TTS) may be unsynthesized;
+//     every trim/effect/transition/mix parameter is live and re-editable.
+//
+//   * PLAYBACK (consumption side) — the simplified output produced AFTER
+//     transcoding. The heavy composite (stitch + transitions + filters + the
+//     full audio mix) is baked into a single transcoded media asset, so the
+//     authoring-only parameters fall away. Only what the player must composite
+//     live (e.g. toggleable captions, interactive stickers) remains as
+//     Elements. It re-uses Timeline/Track/Element/MediaSegment/Caption/Sticker
+//     verbatim — just a much smaller subset of fields is populated.
+//
+// Fields that exist only for AUTHORING are tagged "[authoring]" below; fields
+// the PLAYBACK profile relies on are the geometry/timeline essentials.
+//
+// ---------------------------------------------------------------------------
+// ASSET REFERENCES
+// ---------------------------------------------------------------------------
+// The timeline never embeds bytes or URLs. Every clip references an entry in
+// `Post.assets` by a DOCUMENT-LOCAL key (`asset_ref`). The MediaAsset entry
+// then describes how that slot is currently bound — a local on-device file
+// (creation side, pre-upload), a resolved GLOBAL asset id (resolved via the
+// global asset resolution system), or a CATALOG item. This indirection lets a
+// clip keep the same `asset_ref` while its binding migrates
+// local -> uploaded -> transcoded without rewriting the timeline.
+//
 // Time convention: all times/durations are int64 MILLISECONDS on the project
 // timeline unless noted. Milliseconds (vs. float seconds) keep keyframes and
 // trims exact and avoid drift across clients.
 //
 // Coordinate convention: overlay geometry uses NORMALIZED coordinates in the
 // range [0,1] relative to the output canvas (0,0 = top-left, 1,1 =
-// bottom-right). This keeps a project resolution-independent.
+// bottom-right), so the document is resolution-independent — essential because
+// playback resolution is network-adapted per rendition.
 // =============================================================================
 
 syntax = "proto3";
@@ -46,24 +78,41 @@ message Post {
   // so any reader can determine how to interpret the rest of the document.
   int32 schema_version = 1;
 
+  // Which side of the pipeline produced this document. Tells consumers whether
+  // to expect the full authoring document or the simplified transcoded output.
+  DocumentProfile profile = 2;
+
   // Output / canvas configuration the timeline is composited into.
-  Canvas canvas = 2;
+  Canvas canvas = 3;
 
   // The arrangement of all content over time.
-  Timeline timeline = 3;
+  Timeline timeline = 4;
 
-  // Asset library: every source media referenced by the timeline lives here,
-  // keyed by asset_id. Clips reference assets by id so the same source can be
-  // used in multiple places without duplication.
-  map<string, MediaAsset> assets = 4;
+  // Asset library. Clips reference entries by a DOCUMENT-LOCAL key (the map
+  // key, used as `asset_ref` throughout) so the same source is reused without
+  // duplication and a clip's reference is stable while its underlying binding
+  // migrates from local file -> uploaded global asset -> transcoded output.
+  map<string, MediaAsset> assets = 5;
 
   // Optional draft of what gets attached when the Moment is published.
-  PublishMetadata publish = 5;
+  // [authoring]
+  PublishMetadata publish = 6;
 
-  EditTimestamps timestamps = 6;
+  // [authoring]
+  EditTimestamps timestamps = 7;
 
   // Reserved escape hatch for experimental fields during development.
   map<string, string> extra = 100;
+}
+
+enum DocumentProfile {
+  DOCUMENT_PROFILE_UNSPECIFIED = 0;
+  // Full editor-SDK document (creation side): local media, live edit
+  // parameters, unsynthesized generators.
+  DOCUMENT_PROFILE_AUTHORING = 1;
+  // Simplified output (consumption side) produced after transcoding: composite
+  // baked into a transcoded asset, only live overlays remain.
+  DOCUMENT_PROFILE_PLAYBACK = 2;
 }
 
 message EditTimestamps {
@@ -81,7 +130,7 @@ message PublishMetadata {
   // Cover/thumbnail chosen by the user (timeline timestamp or explicit asset).
   oneof thumbnail {
     int64 thumbnail_timeline_ms = 4;
-    string thumbnail_asset_id = 5;
+    string thumbnail_asset_ref = 5;  // key into Post.assets
   }
   Visibility visibility = 6;
 }
@@ -98,22 +147,23 @@ enum Visibility {
 // =============================================================================
 
 message Canvas {
-  // Final pixel dimensions of the rendered output.
-  int32 width = 1;
-  int32 height = 2;
+  // Aspect ratio is the AUTHORITATIVE shape of the composition. Absolute output
+  // pixels are intentionally NOT stored: the transcoding ladder decides the
+  // delivered resolution per network-adapted rendition, and all geometry is
+  // normalized to this shape, so the same edit renders at any resolution.
+  AspectRatio aspect_ratio = 1;
 
-  // Output frame rate (frames per second), e.g. 30 or 60.
-  double fps = 3;
-
-  AspectRatio aspect_ratio = 4;
+  // Creative-intent frame rate (e.g. 30 or 60). The transcoder targets this;
+  // renditions may still vary. [authoring hint]
+  double fps = 2;
 
   // Background shown where no opaque content covers the canvas (e.g. letterbox
   // bars, or behind a transparent sticker-only project).
-  Color background_color = 5;
+  Color background_color = 3;
 
   // For pure-image "posts" with no motion, the renderer can treat the project
   // as a still; duration still comes from the timeline.
-  PostType post_type = 6;
+  PostType post_type = 4;
 }
 
 enum PostType {
@@ -213,31 +263,34 @@ message TimeRange {
 // track. Putting several of these end-to-end on TRACK_KIND_MAIN_VIDEO is how a
 // "stitch" is represented.
 message MediaSegment {
-  // References Post.assets[asset_id].
-  string asset_id = 1;
+  // Document-local key into Post.assets. On PLAYBACK this is the single baked,
+  // transcoded composite asset; on AUTHORING it is one source clip of a stitch.
+  string asset_ref = 1;
 
   // For video: the in/out trim within the SOURCE media (source time, not
-  // timeline time). For images this is ignored.
+  // timeline time). For images this is ignored. [authoring]
   SourceTrim source_trim = 2;
 
   // Playback speed multiplier for video (2.0 = 2x fast, 0.5 = slow-mo).
   // The resulting duration on the timeline is governed by timeline_range; speed
-  // determines how much source is consumed.
+  // determines how much source is consumed. [authoring]
   double speed = 3;          // default 1.0
 
-  bool reverse = 4;          // play source backwards
+  bool reverse = 4;          // play source backwards [authoring]
 
-  // Geometry within the canvas (PiP placement, scale, rotation, crop).
+  // Geometry within the canvas (PiP placement, scale, rotation, crop). Used by
+  // overlay clips that survive into PLAYBACK as live composited layers.
   Transform transform = 5;
   CropRect crop = 6;
 
   // How the frame fits the canvas when this is a full-frame clip.
   FitMode fit_mode = 7;
 
-  // Audio that ships inside the video file.
+  // Audio that ships inside the video file. [authoring]
   AudioProperties embedded_audio = 8;
 
   // Transitions to the neighboring clip on the same track (stitch joins).
+  // [authoring] — baked into the transcoded composite on PLAYBACK.
   Transition transition_in = 9;
   Transition transition_out = 10;
 }
@@ -284,9 +337,11 @@ enum TransitionType {
 // =============================================================================
 
 // AudioSegment places sourced audio (a music track, an uploaded sound effect,
-// or a recorded voiceover) onto an audio track.
+// or a recorded voiceover) onto an audio track. [authoring] — on PLAYBACK the
+// full audio mix is baked into the transcoded composite asset's track, so
+// AudioSegments are not present.
 message AudioSegment {
-  string asset_id = 1;          // references Post.assets[asset_id]
+  string asset_ref = 1;         // key into Post.assets
   AudioKind kind = 2;
   SourceTrim source_trim = 3;   // trim within the source audio
   double speed = 4;             // default 1.0
@@ -324,8 +379,9 @@ message Ducking {
   int64 release_ms = 4;
 }
 
-// TtsSegment generates audio from text. The generated audio may be cached as an
-// asset (cached_asset_id) once synthesized so the renderer/playback reuses it.
+// TtsSegment generates audio from text. [authoring] — it is a GENERATOR: once
+// synthesized its output is materialized into an audio MediaAsset and mixed
+// into the composite, so TtsSegments do not appear in the PLAYBACK profile.
 message TtsSegment {
   string text = 1;
   string voice_id = 2;        // catalog voice identifier
@@ -334,8 +390,9 @@ message TtsSegment {
   string language_code = 5;   // BCP-47, e.g. "en-US"
   AudioProperties properties = 6;
 
-  // Populated after synthesis; lets clients avoid re-generating audio.
-  string cached_asset_id = 7;
+  // Document-local key of the synthesized audio asset, once generated; lets
+  // clients avoid re-synthesizing. Empty until synthesis runs.
+  string output_asset_ref = 7;
 }
 
 // =============================================================================
@@ -351,7 +408,7 @@ message Caption {
   Transform transform = 3;     // position/scale/rotation on canvas
 
   // Optional link to an audio element this caption transcribes, enabling
-  // auto-caption / karaoke highlighting and resync.
+  // auto-caption / karaoke highlighting and resync. [authoring]
   string source_audio_element_id = 4;
 
   // Optional per-word timing for karaoke-style highlighting.
@@ -420,13 +477,16 @@ enum TextAlign {
 
 message Sticker {
   oneof source {
-    string asset_id = 1;       // uploaded/GIF/Lottie/image sticker -> assets[]
-    string catalog_sticker_id = 2; // built-in sticker pack id
-    string emoji = 3;          // unicode emoji rendered as a sticker
+    // Key into Post.assets. The asset binding decides whether it is an
+    // uploaded/GIF/Lottie image or a catalog sticker (CatalogRef), so both go
+    // through the same resolution path.
+    string asset_ref = 1;
+    // Unicode emoji rendered as a sticker; needs no asset entry.
+    string emoji = 2;
   }
-  Transform transform = 4;
-  StickerKind kind = 5;
-  bool loop = 6;               // for animated stickers shorter than the element
+  Transform transform = 3;
+  StickerKind kind = 4;
+  bool loop = 5;               // for animated stickers shorter than the element
 }
 
 enum StickerKind {
@@ -564,34 +624,83 @@ message Color {
 // Media assets (the source library)
 // =============================================================================
 
-// MediaAsset is a pure REFERENCE to source media. This data model never stores
-// byte locations (URLs/paths). Clients resolve the actual media through the
-// global asset resolution system keyed by asset_id; that system is the single
-// source of truth for where the bytes live and how to fetch them.
+// MediaAsset is an entry in the document-local asset library. It is a pure
+// REFERENCE: it never stores byte locations or rendition-specific properties
+// (pixel size, mime/codec, bitrate, file size), since playback resolution and
+// format are network-adapted per delivered rendition.
 //
-// Crucially, the model also stores NO rendition-specific properties (pixel
-// width/height, mime type, codec, bitrate, file size). On the consumption
-// side, playback resolution/format is adapted to the user's network, so those
-// values differ per delivered rendition and are not fixed attributes of the
-// edit. Geometry stays resolution-independent via normalized coordinates and
-// FitMode; the player applies the edit to whatever rendition it resolves.
+// The `source` oneof captures the binding, which evolves over the lifecycle:
+//
+//   LocalSource  --upload-->  global_asset_id  --(used as input to)-->  transcode
+//
+// On AUTHORING a freshly captured clip starts as a LocalSource; once uploaded
+// it carries a global_asset_id; catalog items (licensed music, sticker packs)
+// are CatalogRef from the start. On PLAYBACK every binding is a resolved
+// global_asset_id (typically the single transcoded composite).
 message MediaAsset {
-  // Opaque global asset id. Resolve via the asset resolution system to obtain
-  // the appropriate (network-adapted) playable/renderable rendition.
-  string asset_id = 1;
-  AssetType type = 2;
+  AssetType type = 1;
+
+  oneof source {
+    // Creation side only: an on-device file/capture not yet uploaded. Never
+    // delivered to the consumption side. [authoring]
+    LocalSource local = 2;
+
+    // Opaque global asset id. Resolve via the global asset resolution system
+    // to obtain the appropriate (network-adapted) rendition. This is the ONLY
+    // binding present on the PLAYBACK side.
+    string global_asset_id = 3;
+
+    // Licensed / built-in catalog item (music, sticker pack, sfx).
+    CatalogRef catalog = 4;
+  }
 
   // Intrinsic, RENDITION-INDEPENDENT content duration (video/audio). Optional
-  // cached hint from the resolver, used for trim bounds and default clip
-  // length. Unlike resolution/format, content duration is the same across
-  // renditions. The resolver remains authoritative.
-  int64 duration_ms = 3;
+  // cached hint, used for trim bounds and default clip length. Unlike
+  // resolution/format, duration is the same across renditions; the resolver
+  // remains authoritative.
+  int64 duration_ms = 5;
 
   // For Roblox-native sources: which experience/capture this came from.
-  AssetOrigin origin = 4;
+  AssetOrigin origin = 6;
 
-  // Optional low-res poster/thumbnail, itself an asset id resolved the same way.
-  string thumbnail_asset_id = 5;
+  // Optional low-res poster/thumbnail, itself a document-local asset key.
+  string thumbnail_asset_ref = 7;
+
+  // Lifecycle of a local source as it is uploaded and processed. [authoring]
+  UploadStatus upload_status = 8;
+}
+
+// An on-device source that has not yet been uploaded to the asset system.
+message LocalSource {
+  // Opaque, client-scoped handle to the local file/capture (e.g. a photo
+  // library id, content URI, or temp capture path). Meaningful only on the
+  // device that created it.
+  string local_handle = 1;
+  // Where the local file came from, for UX/attribution and upload routing.
+  AssetSource capture_source = 2;
+}
+
+// Reference to an item in a managed catalog (licensed music, sticker packs,
+// sound effects). Resolved through the catalog service rather than user uploads.
+message CatalogRef {
+  string catalog_id = 1;
+  CatalogKind kind = 2;
+}
+
+enum CatalogKind {
+  CATALOG_KIND_UNSPECIFIED = 0;
+  CATALOG_KIND_MUSIC = 1;
+  CATALOG_KIND_STICKER = 2;
+  CATALOG_KIND_SOUND_EFFECT = 3;
+}
+
+// Upload/processing state of a LocalSource on the creation side.
+enum UploadStatus {
+  UPLOAD_STATUS_UNSPECIFIED = 0;
+  UPLOAD_STATUS_LOCAL_ONLY = 1;   // not yet uploaded
+  UPLOAD_STATUS_UPLOADING = 2;
+  UPLOAD_STATUS_UPLOADED = 3;     // global_asset_id now available
+  UPLOAD_STATUS_FAILED = 4;
 }
 
 enum AssetType {
