@@ -13,6 +13,18 @@ import editing_model_pb2 as pb   # generated from editing_model.proto
 post = text_format.Parse(open("01_single_video.textproto").read(), pb.Post())
 ```
 
+### Validating
+
+[`../validate.py`](../validate.py) compiles the schema and parses every sample,
+so these stay in lock-step with `editing_model.proto`:
+
+```bash
+pip install grpcio-tools
+python3 moments-video-editor/validate.py
+```
+
+All samples are confirmed to parse against the current schema.
+
 ## Cases
 
 | File | Scenario |
