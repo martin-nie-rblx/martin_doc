@@ -36,34 +36,31 @@ option go_package = "github.com/Roblox/moments/editor/v1;editorv1";
 // Top-level document
 // =============================================================================
 
-// Post is the root document for one editing session. It is the unit that gets
-// autosaved, versioned, and finally rendered/published as a Moment.
+// Post is the root document describing the editing state for one Moment. It
+// holds ONLY the editing data model; identity and ownership metadata
+// (post id, owner user id, title, etc.) are stored separately by the backend
+// and are intentionally not embedded here.
 message Post {
   // Monotonic schema version so clients can migrate older documents and
   // maintain backward compatibility across app releases. Always the first field
   // so any reader can determine how to interpret the rest of the document.
   int32 schema_version = 1;
 
-  string owner_user_id = 2;
-
-  // Free-form title shown in the editor UI (not the published caption).
-  string title = 3;
-
   // Output / canvas configuration the timeline is composited into.
-  Canvas canvas = 4;
+  Canvas canvas = 2;
 
   // The arrangement of all content over time.
-  Timeline timeline = 5;
+  Timeline timeline = 3;
 
   // Asset library: every source media referenced by the timeline lives here,
   // keyed by asset_id. Clips reference assets by id so the same source can be
   // used in multiple places without duplication.
-  map<string, MediaAsset> assets = 6;
+  map<string, MediaAsset> assets = 4;
 
   // Optional draft of what gets attached when the Moment is published.
-  PublishMetadata publish = 7;
+  PublishMetadata publish = 5;
 
-  EditTimestamps timestamps = 8;
+  EditTimestamps timestamps = 6;
 
   // Reserved escape hatch for experimental fields during development.
   map<string, string> extra = 100;

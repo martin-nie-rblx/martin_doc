@@ -19,7 +19,8 @@ transitions, and animations**.
 ## Core structure
 
 ```
-Post  (schema_version + content; no post id — identity lives outside the doc)
+Post  (schema_version + editing content only; post id / owner / title are
+       stored separately by the backend, not embedded here)
 ├── Canvas            (output: resolution, fps, aspect ratio, image vs video)
 ├── Timeline
 │   └── Track[]       (kind: MAIN_VIDEO | OVERLAY_VIDEO | AUDIO | CAPTION | STICKER)
