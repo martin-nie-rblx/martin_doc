@@ -9,7 +9,7 @@ transitions, and animations**.
 
 | Goal | How the schema achieves it |
 | --- | --- |
-| **Declarative & reproducible** | The `EditProject` document fully describes the rendered output. A renderer can reproduce the final video from the document + referenced assets alone. |
+| **Declarative & reproducible** | The `Post` document fully describes the rendered output. A renderer can reproduce the final video from the document + referenced assets alone. |
 | **Non-destructive** | Source media is referenced via `MediaAsset` and never mutated. Trims, speed, volume, crops, filters, and transforms are all parameters. |
 | **Composable** | A standard layered **Timeline → Track → Element** model (like every modern NLE) lets stitch / overlay / audio / caption / sticker compose on a shared time axis. |
 | **Extensible** | New tools become new variants of the `Element` `oneof` or new `Effect` types. `NamedEffect` + `extra` maps give an escape hatch with no schema break. |
@@ -19,7 +19,7 @@ transitions, and animations**.
 ## Core structure
 
 ```
-EditProject
+Post  (schema_version + content; no post id — identity lives outside the doc)
 ├── Canvas            (output: resolution, fps, aspect ratio, image vs video)
 ├── Timeline
 │   └── Track[]       (kind: MAIN_VIDEO | OVERLAY_VIDEO | AUDIO | CAPTION | STICKER)

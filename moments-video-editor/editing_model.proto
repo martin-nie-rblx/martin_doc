@@ -36,33 +36,34 @@ option go_package = "github.com/Roblox/moments/editor/v1;editorv1";
 // Top-level document
 // =============================================================================
 
-// EditProject is the root document for one editing session. It is the unit that
-// gets autosaved, versioned, and finally rendered/published.
-message EditProject {
-  string project_id = 1;
+// Post is the root document for one editing session. It is the unit that gets
+// autosaved, versioned, and finally rendered/published as a Moment.
+message Post {
+  // Monotonic schema version so clients can migrate older documents and
+  // maintain backward compatibility across app releases. Always the first field
+  // so any reader can determine how to interpret the rest of the document.
+  int32 schema_version = 1;
+
   string owner_user_id = 2;
 
   // Free-form title shown in the editor UI (not the published caption).
   string title = 3;
 
-  // Monotonic schema version so clients can migrate older documents.
-  int32 schema_version = 4;
-
   // Output / canvas configuration the timeline is composited into.
-  Canvas canvas = 5;
+  Canvas canvas = 4;
 
   // The arrangement of all content over time.
-  Timeline timeline = 6;
+  Timeline timeline = 5;
 
   // Asset library: every source media referenced by the timeline lives here,
   // keyed by asset_id. Clips reference assets by id so the same source can be
   // used in multiple places without duplication.
-  map<string, MediaAsset> assets = 7;
+  map<string, MediaAsset> assets = 6;
 
   // Optional draft of what gets attached when the Moment is published.
-  PublishMetadata publish = 8;
+  PublishMetadata publish = 7;
 
-  EditTimestamps timestamps = 9;
+  EditTimestamps timestamps = 8;
 
   // Reserved escape hatch for experimental fields during development.
   map<string, string> extra = 100;
@@ -215,7 +216,7 @@ message TimeRange {
 // track. Putting several of these end-to-end on TRACK_KIND_MAIN_VIDEO is how a
 // "stitch" is represented.
 message MediaSegment {
-  // References EditProject.assets[asset_id].
+  // References Post.assets[asset_id].
   string asset_id = 1;
 
   // For video: the in/out trim within the SOURCE media (source time, not
@@ -288,7 +289,7 @@ enum TransitionType {
 // AudioSegment places sourced audio (a music track, an uploaded sound effect,
 // or a recorded voiceover) onto an audio track.
 message AudioSegment {
-  string asset_id = 1;          // references EditProject.assets[asset_id]
+  string asset_id = 1;          // references Post.assets[asset_id]
   AudioKind kind = 2;
   SourceTrim source_trim = 3;   // trim within the source audio
   double speed = 4;             // default 1.0
