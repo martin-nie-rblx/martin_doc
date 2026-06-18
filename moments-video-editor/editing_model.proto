@@ -564,27 +564,31 @@ message Color {
 // Media assets (the source library)
 // =============================================================================
 
+// MediaAsset is a pure REFERENCE to source media. This data model never stores
+// byte locations (URLs/paths). Clients resolve the actual media through the
+// global asset resolution system keyed by asset_id; that system is the single
+// source of truth for where the bytes live and how to fetch them.
 message MediaAsset {
+  // Opaque global asset id. Resolve via the asset resolution system to obtain
+  // the playable/renderable media.
   string asset_id = 1;
   AssetType type = 2;
 
-  // Where the bytes live. Could be a CDN url, a content-addressed id, or a
-  // local capture path while editing.
-  string uri = 3;
-
-  // Intrinsic media properties (best-effort; filled after probe).
-  int32 width = 4;            // px (video/image)
-  int32 height = 5;
-  int64 duration_ms = 6;      // video/audio
-  double source_fps = 7;
-  string mime_type = 8;
-  int64 size_bytes = 9;
+  // Intrinsic media properties are OPTIONAL cached hints, populated from the
+  // resolver to let the editor lay out the timeline without resolving every
+  // asset up front. The resolver remains authoritative.
+  int32 width = 3;            // px (video/image)
+  int32 height = 4;
+  int64 duration_ms = 5;      // video/audio
+  double source_fps = 6;
+  string mime_type = 7;
+  int64 size_bytes = 8;
 
   // For Roblox-native sources: which experience/capture this came from.
-  AssetOrigin origin = 10;
+  AssetOrigin origin = 9;
 
-  // A low-res poster/thumbnail asset id for fast UI rendering.
-  string thumbnail_uri = 11;
+  // Optional low-res poster/thumbnail, itself an asset id resolved the same way.
+  string thumbnail_asset_id = 10;
 }
 
 enum AssetType {

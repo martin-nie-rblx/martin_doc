@@ -84,8 +84,9 @@ animations.
 1. **Image posts / slideshows** — modeled as `MediaSegment`s with `IMAGE`
    assets on the main track (each with its own duration). Confirm whether
    slideshow transitions need a dedicated type.
-2. **Asset storage** — `MediaAsset.uri` is intentionally opaque (CDN URL,
-   content-addressed id, or local capture path). Confirm the canonical form.
+2. **Asset storage** — the model stores **no byte locations**. `MediaAsset` is a
+   pure reference (`asset_id` + optional cached hints); clients resolve media
+   through the global asset resolution system, which is the source of truth.
 3. **TTS caching** — assumes synthesized audio is materialized to an asset for
    playback determinism; confirm whether on-the-fly synthesis is preferred.
 4. **Server vs client rendering** — schema is render-target-agnostic; confirm
