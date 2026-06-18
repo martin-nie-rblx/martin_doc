@@ -1,0 +1,92 @@
+# Case: 1 video + music + caption (combined overlays).
+# A common real-world Moment: video, a music bed, and a single styled caption.
+
+schema_version: 1
+profile: DOCUMENT_PROFILE_AUTHORING
+
+canvas {
+  aspect_ratio: ASPECT_RATIO_9_16
+  fps: 30
+  post_type: POST_TYPE_VIDEO
+}
+
+timeline {
+  duration_ms: 10000
+
+  tracks {
+    track_id: "main"
+    kind: TRACK_KIND_MAIN_VIDEO
+    z_order: 0
+    elements {
+      element_id: "e_clip1"
+      timeline_range { start_ms: 0 duration_ms: 10000 }
+      media {
+        asset_ref: "clip1"
+        fit_mode: FIT_MODE_COVER
+        embedded_audio { muted: true }
+      }
+    }
+  }
+
+  tracks {
+    track_id: "music"
+    kind: TRACK_KIND_AUDIO
+    z_order: 0
+    elements {
+      element_id: "e_music"
+      timeline_range { start_ms: 0 duration_ms: 10000 }
+      audio {
+        asset_ref: "song1"
+        kind: AUDIO_KIND_MUSIC
+        source_trim { in_point_ms: 30000 out_point_ms: 40000 }
+        properties { volume: 0.85 fade_in_ms: 250 fade_out_ms: 1000 }
+        display_title: "Sunset Drive — The Examples"
+      }
+    }
+  }
+
+  tracks {
+    track_id: "captions"
+    kind: TRACK_KIND_CAPTION
+    z_order: 20
+    elements {
+      element_id: "e_cap1"
+      timeline_range { start_ms: 1000 duration_ms: 4000 }
+      caption {
+        text: "best day ever ☀️"
+        preset: CAPTION_PRESET_BOLD_HIGHLIGHT
+        style {
+          font_family: "Inter"
+          font_size: 0.07
+          text_color { r: 1 g: 1 b: 1 a: 1 }
+          stroke { color { r: 0 g: 0 b: 0 a: 1 } width: 2.0 }
+          bold: true
+          align: TEXT_ALIGN_CENTER
+        }
+        transform {
+          position { x: 0.5 y: 0.8 }
+          anchor { x: 0.5 y: 0.5 }
+          scale { x: 1 y: 1 }
+          opacity: 1
+        }
+      }
+    }
+  }
+}
+
+assets {
+  key: "clip1"
+  value {
+    type: ASSET_TYPE_VIDEO
+    global_asset_id: "rbxassetid://1001"
+    duration_ms: 10000
+  }
+}
+assets {
+  key: "song1"
+  value {
+    type: ASSET_TYPE_AUDIO
+    catalog { catalog_id: "music/sunset-drive" kind: CATALOG_KIND_MUSIC }
+    duration_ms: 180000
+  }
+}

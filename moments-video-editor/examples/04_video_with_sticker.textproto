@@ -1,0 +1,83 @@
+# Case: 1 video + a sticker overlay.
+# Shows two stickers on a sticker track above the video: a catalog/image
+# sticker placed top-right, and an inline emoji that pops in with an animation.
+
+schema_version: 1
+profile: DOCUMENT_PROFILE_AUTHORING
+
+canvas {
+  aspect_ratio: ASPECT_RATIO_9_16
+  fps: 30
+  post_type: POST_TYPE_VIDEO
+}
+
+timeline {
+  duration_ms: 8000
+
+  tracks {
+    track_id: "main"
+    kind: TRACK_KIND_MAIN_VIDEO
+    z_order: 0
+    elements {
+      element_id: "e_clip1"
+      timeline_range { start_ms: 0 duration_ms: 8000 }
+      media { asset_ref: "clip1" fit_mode: FIT_MODE_COVER }
+    }
+  }
+
+  tracks {
+    track_id: "stickers"
+    kind: TRACK_KIND_STICKER
+    z_order: 10
+    elements {
+      # An animated catalog sticker, top-right, visible the whole clip.
+      element_id: "e_sticker_img"
+      timeline_range { start_ms: 0 duration_ms: 8000 }
+      sticker {
+        asset_ref: "sticker_party"
+        kind: STICKER_KIND_ANIMATED
+        loop: true
+        transform {
+          position { x: 0.82 y: 0.12 }
+          anchor { x: 0.5 y: 0.5 }
+          scale { x: 1.0 y: 1.0 }
+          opacity: 1.0
+        }
+      }
+    }
+    elements {
+      # An inline emoji that pops in at 2s for 3s.
+      element_id: "e_sticker_emoji"
+      timeline_range { start_ms: 2000 duration_ms: 3000 }
+      enter_animation { type: ANIMATION_TYPE_POP duration_ms: 300 easing: EASING_EASE_OUT }
+      exit_animation { type: ANIMATION_TYPE_FADE duration_ms: 300 easing: EASING_EASE_IN }
+      sticker {
+        emoji: "🔥"
+        kind: STICKER_KIND_EMOJI
+        transform {
+          position { x: 0.5 y: 0.7 }
+          anchor { x: 0.5 y: 0.5 }
+          scale { x: 1.5 y: 1.5 }
+          rotation_deg: -8.0
+          opacity: 1.0
+        }
+      }
+    }
+  }
+}
+
+assets {
+  key: "clip1"
+  value {
+    type: ASSET_TYPE_VIDEO
+    global_asset_id: "rbxassetid://1001"
+    duration_ms: 8000
+  }
+}
+assets {
+  key: "sticker_party"
+  value {
+    type: ASSET_TYPE_LOTTIE
+    catalog { catalog_id: "stickers/party-popper" kind: CATALOG_KIND_STICKER }
+  }
+}

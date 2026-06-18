@@ -1,0 +1,70 @@
+# Case: 2-video stitch.
+# Two clips placed back-to-back on the main track form the "stitch", joined by
+# a crossfade. Clip A is trimmed and slowed down; clip B is a freshly captured
+# LOCAL file that has not been uploaded yet (creation-side state).
+
+schema_version: 1
+profile: DOCUMENT_PROFILE_AUTHORING
+
+canvas {
+  aspect_ratio: ASPECT_RATIO_9_16
+  fps: 30
+  post_type: POST_TYPE_VIDEO
+}
+
+timeline {
+  duration_ms: 11000
+
+  tracks {
+    track_id: "main"
+    kind: TRACK_KIND_MAIN_VIDEO
+    z_order: 0
+
+    # Clip A: use source 0..10s at 0.5x speed -> occupies 6s on the timeline.
+    elements {
+      element_id: "e_clipA"
+      timeline_range { start_ms: 0 duration_ms: 6000 }
+      media {
+        asset_ref: "clipA"
+        source_trim { in_point_ms: 0 out_point_ms: 3000 }
+        speed: 0.5
+        fit_mode: FIT_MODE_COVER
+        transition_out { type: TRANSITION_TYPE_CROSSFADE duration_ms: 500 }
+      }
+    }
+
+    # Clip B: starts where A ends, crossfading in.
+    elements {
+      element_id: "e_clipB"
+      timeline_range { start_ms: 6000 duration_ms: 5000 }
+      media {
+        asset_ref: "clipB"
+        source_trim { in_point_ms: 1000 out_point_ms: 6000 }
+        fit_mode: FIT_MODE_COVER
+        transition_in { type: TRANSITION_TYPE_CROSSFADE duration_ms: 500 }
+      }
+    }
+  }
+}
+
+assets {
+  key: "clipA"
+  value {
+    type: ASSET_TYPE_VIDEO
+    global_asset_id: "rbxassetid://1001"
+    duration_ms: 12000
+  }
+}
+assets {
+  key: "clipB"
+  value {
+    type: ASSET_TYPE_VIDEO
+    # Not yet uploaded: bound to an on-device capture handle.
+    local {
+      local_handle: "ph://A1B2-C3D4-E5F6"
+      capture_source: ASSET_SOURCE_CAMERA_ROLL
+    }
+    duration_ms: 9000
+    upload_status: UPLOAD_STATUS_LOCAL_ONLY
+  }
+}

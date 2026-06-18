@@ -1,0 +1,88 @@
+# Case: image post / slideshow (no source video).
+# Three images shown in sequence on the main track, each with its own duration,
+# joined by slide transitions, with a music bed. post_type = IMAGE.
+
+schema_version: 1
+profile: DOCUMENT_PROFILE_AUTHORING
+
+canvas {
+  aspect_ratio: ASPECT_RATIO_1_1
+  fps: 30
+  post_type: POST_TYPE_IMAGE
+  background_color { r: 0 g: 0 b: 0 a: 1 }
+}
+
+timeline {
+  duration_ms: 9000
+
+  tracks {
+    track_id: "main"
+    kind: TRACK_KIND_MAIN_VIDEO
+    z_order: 0
+
+    elements {
+      element_id: "e_img1"
+      timeline_range { start_ms: 0 duration_ms: 3000 }
+      media {
+        asset_ref: "img1"
+        fit_mode: FIT_MODE_COVER
+        transition_out { type: TRANSITION_TYPE_SLIDE duration_ms: 400 }
+      }
+    }
+    elements {
+      element_id: "e_img2"
+      timeline_range { start_ms: 3000 duration_ms: 3000 }
+      media {
+        asset_ref: "img2"
+        fit_mode: FIT_MODE_COVER
+        transition_in { type: TRANSITION_TYPE_SLIDE duration_ms: 400 }
+        transition_out { type: TRANSITION_TYPE_SLIDE duration_ms: 400 }
+      }
+    }
+    elements {
+      element_id: "e_img3"
+      timeline_range { start_ms: 6000 duration_ms: 3000 }
+      media {
+        asset_ref: "img3"
+        fit_mode: FIT_MODE_COVER
+        transition_in { type: TRANSITION_TYPE_SLIDE duration_ms: 400 }
+      }
+    }
+  }
+
+  tracks {
+    track_id: "music"
+    kind: TRACK_KIND_AUDIO
+    z_order: 0
+    elements {
+      element_id: "e_music"
+      timeline_range { start_ms: 0 duration_ms: 9000 }
+      audio {
+        asset_ref: "song1"
+        kind: AUDIO_KIND_MUSIC
+        properties { volume: 0.8 fade_out_ms: 800 }
+      }
+    }
+  }
+}
+
+assets {
+  key: "img1"
+  value { type: ASSET_TYPE_IMAGE global_asset_id: "rbxassetid://4001" }
+}
+assets {
+  key: "img2"
+  value { type: ASSET_TYPE_IMAGE global_asset_id: "rbxassetid://4002" }
+}
+assets {
+  key: "img3"
+  value { type: ASSET_TYPE_IMAGE global_asset_id: "rbxassetid://4003" }
+}
+assets {
+  key: "song1"
+  value {
+    type: ASSET_TYPE_AUDIO
+    catalog { catalog_id: "music/sunset-drive" kind: CATALOG_KIND_MUSIC }
+    duration_ms: 180000
+  }
+}

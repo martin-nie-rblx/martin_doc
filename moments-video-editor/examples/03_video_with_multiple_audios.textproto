@@ -1,0 +1,122 @@
+# Case: 1 video + multiple audios (music + voiceover + a sound effect).
+# Demonstrates several audio tracks mixed together, plus ducking: the music
+# auto-lowers whenever the voiceover track is active.
+
+schema_version: 1
+profile: DOCUMENT_PROFILE_AUTHORING
+
+canvas {
+  aspect_ratio: ASPECT_RATIO_9_16
+  fps: 30
+  post_type: POST_TYPE_VIDEO
+}
+
+timeline {
+  duration_ms: 12000
+
+  tracks {
+    track_id: "main"
+    kind: TRACK_KIND_MAIN_VIDEO
+    z_order: 0
+    elements {
+      element_id: "e_clip1"
+      timeline_range { start_ms: 0 duration_ms: 12000 }
+      media {
+        asset_ref: "clip1"
+        fit_mode: FIT_MODE_COVER
+        embedded_audio { muted: true }
+      }
+    }
+  }
+
+  # Background music for the whole clip, ducked under the voiceover.
+  tracks {
+    track_id: "music"
+    kind: TRACK_KIND_AUDIO
+    z_order: 0
+    elements {
+      element_id: "e_music"
+      timeline_range { start_ms: 0 duration_ms: 12000 }
+      audio {
+        asset_ref: "song1"
+        kind: AUDIO_KIND_MUSIC
+        properties {
+          volume: 0.7
+          fade_out_ms: 1000
+          ducking {
+            trigger_track_id: "vo"
+            duck_to_volume: 0.2
+            attack_ms: 150
+            release_ms: 400
+          }
+        }
+      }
+    }
+  }
+
+  # Recorded voiceover from 2s..9s.
+  tracks {
+    track_id: "vo"
+    kind: TRACK_KIND_AUDIO
+    z_order: 1
+    elements {
+      element_id: "e_vo"
+      timeline_range { start_ms: 2000 duration_ms: 7000 }
+      audio {
+        asset_ref: "voiceover1"
+        kind: AUDIO_KIND_VOICEOVER
+        properties { volume: 1.0 }
+      }
+    }
+  }
+
+  # A one-shot sound effect at the 10s mark.
+  tracks {
+    track_id: "sfx"
+    kind: TRACK_KIND_AUDIO
+    z_order: 2
+    elements {
+      element_id: "e_sfx"
+      timeline_range { start_ms: 10000 duration_ms: 1200 }
+      audio {
+        asset_ref: "whoosh"
+        kind: AUDIO_KIND_SOUND_EFFECT
+        properties { volume: 0.9 }
+      }
+    }
+  }
+}
+
+assets {
+  key: "clip1"
+  value {
+    type: ASSET_TYPE_VIDEO
+    global_asset_id: "rbxassetid://1001"
+    duration_ms: 12000
+  }
+}
+assets {
+  key: "song1"
+  value {
+    type: ASSET_TYPE_AUDIO
+    catalog { catalog_id: "music/sunset-drive" kind: CATALOG_KIND_MUSIC }
+    duration_ms: 180000
+  }
+}
+assets {
+  key: "voiceover1"
+  value {
+    type: ASSET_TYPE_AUDIO
+    global_asset_id: "rbxassetid://2002"
+    duration_ms: 7000
+    origin { source: ASSET_SOURCE_CAMERA_ROLL }
+  }
+}
+assets {
+  key: "whoosh"
+  value {
+    type: ASSET_TYPE_AUDIO
+    catalog { catalog_id: "sfx/whoosh-01" kind: CATALOG_KIND_SOUND_EFFECT }
+    duration_ms: 1200
+  }
+}

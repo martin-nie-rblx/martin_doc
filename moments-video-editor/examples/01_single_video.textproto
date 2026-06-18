@@ -1,0 +1,42 @@
+# Case: a single video, no edits.
+# The simplest possible Moment: one clip filling an 8s vertical timeline.
+
+schema_version: 1
+profile: DOCUMENT_PROFILE_AUTHORING
+
+canvas {
+  aspect_ratio: ASPECT_RATIO_9_16
+  fps: 30
+  post_type: POST_TYPE_VIDEO
+}
+
+timeline {
+  duration_ms: 8000
+  tracks {
+    track_id: "main"
+    kind: TRACK_KIND_MAIN_VIDEO
+    z_order: 0
+    elements {
+      element_id: "e_clip1"
+      timeline_range { start_ms: 0 duration_ms: 8000 }
+      media {
+        asset_ref: "clip1"
+        fit_mode: FIT_MODE_COVER
+      }
+    }
+  }
+}
+
+assets {
+  key: "clip1"
+  value {
+    type: ASSET_TYPE_VIDEO
+    global_asset_id: "rbxassetid://1001"
+    duration_ms: 8000
+    origin {
+      source: ASSET_SOURCE_IN_EXPERIENCE
+      universe_id: 123
+      place_id: 456
+    }
+  }
+}

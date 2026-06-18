@@ -1,0 +1,96 @@
+# Case: 1 video + text-to-speech narration + matching caption.
+# The TTS segment generates narration audio; a caption shows the same text and
+# links back to the TTS element so highlighting can stay in sync.
+
+schema_version: 1
+profile: DOCUMENT_PROFILE_AUTHORING
+
+canvas {
+  aspect_ratio: ASPECT_RATIO_9_16
+  fps: 30
+  post_type: POST_TYPE_VIDEO
+}
+
+timeline {
+  duration_ms: 9000
+
+  tracks {
+    track_id: "main"
+    kind: TRACK_KIND_MAIN_VIDEO
+    z_order: 0
+    elements {
+      element_id: "e_clip1"
+      timeline_range { start_ms: 0 duration_ms: 9000 }
+      media { asset_ref: "clip1" fit_mode: FIT_MODE_COVER embedded_audio { muted: true } }
+    }
+  }
+
+  tracks {
+    track_id: "narration"
+    kind: TRACK_KIND_AUDIO
+    z_order: 1
+    elements {
+      element_id: "e_tts"
+      timeline_range { start_ms: 1000 duration_ms: 5000 }
+      tts {
+        text: "Check out this epic obby run"
+        voice_id: "voice/en-US-narrator-3"
+        speaking_rate: 1.0
+        pitch: 0.0
+        language_code: "en-US"
+        properties { volume: 1.0 }
+        # Populated after synthesis; empty here means "not yet generated".
+        output_asset_ref: "tts_audio_1"
+      }
+    }
+  }
+
+  tracks {
+    track_id: "captions"
+    kind: TRACK_KIND_CAPTION
+    z_order: 20
+    elements {
+      element_id: "e_cap1"
+      timeline_range { start_ms: 1000 duration_ms: 5000 }
+      caption {
+        text: "Check out this epic obby run"
+        preset: CAPTION_PRESET_TYPEWRITER
+        # Keeps this caption tied to the narration for resync/highlighting.
+        source_audio_element_id: "e_tts"
+        style {
+          font_family: "Inter"
+          font_size: 0.06
+          text_color { r: 1 g: 1 b: 1 a: 1 }
+          bold: true
+          align: TEXT_ALIGN_CENTER
+        }
+        transform {
+          position { x: 0.5 y: 0.82 }
+          anchor { x: 0.5 y: 0.5 }
+          scale { x: 1 y: 1 }
+          opacity: 1
+        }
+      }
+    }
+  }
+}
+
+assets {
+  key: "clip1"
+  value {
+    type: ASSET_TYPE_VIDEO
+    global_asset_id: "rbxassetid://1001"
+    duration_ms: 9000
+  }
+}
+# The synthesized TTS output, once generated, is materialized as an audio asset
+# and referenced by the TtsSegment via output_asset_ref.
+assets {
+  key: "tts_audio_1"
+  value {
+    type: ASSET_TYPE_AUDIO
+    global_asset_id: "rbxassetid://3003"
+    duration_ms: 5000
+    origin { source: ASSET_SOURCE_TTS }
+  }
+}
