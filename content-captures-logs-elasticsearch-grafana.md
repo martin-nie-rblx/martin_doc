@@ -1,20 +1,54 @@
 # Content Captures: Logs, Metrics → Grafana
 
-How backend logs reach Elasticsearch (panopticlogs) and how metrics flow through BEDEV2 instrumentation → VictoriaMetrics / Prometheus into Grafana.
+How backend logs reach Elasticsearch (**panopticlogs**) and how metrics flow through BEDEV2 instrumentation → VictoriaMetrics / Prometheus into Grafana.
 
 ## Short answer
 
-The services **do not connect to Elasticsearch**. They write structured JSON to **stdout**. The Nomad/platform log pipeline scrapes that stdout into the **panopticlogs** Elasticsearch cluster. Grafana already has a `panopticlogs` Elasticsearch datasource wired into the managed/custom service dashboards.
+The services **do not connect to Elasticsearch or VictoriaMetrics**. They:
 
-## Pipeline
+- Write structured JSON logs to **stdout** → platform ships them to **panopticlogs**
+- Expose Prometheus metrics on **`/metrics`** → platform scrapes them into **VictoriaMetrics**
+
+Grafana already wires both as datasources on the managed/custom service dashboards (`panopticlogs`, `Prometheus`).
+
+---
+
+## What is panopticlogs?
+
+**panopticlogs** is Roblox’s shared application-log store in Elasticsearch — the place Nomad service stdout/stderr lands after **Fluent Bit** scrapes it.
+
+It is **not** a library or a sink you configure in the app. BEDEV2 services just write structured logs to the console; the platform ships them into panopticlogs. You query it from Grafana via the datasource named **`panopticlogs`** (dashboard variable `$panopticlogs_ds`).
+
+```text
+Your service (Serilog JSON → stdout / stderr)
+  → Fluent Bit on the host/allocation
+  → panopticlogs (Elasticsearch)
+  → Grafana datasource "panopticlogs" ($panopticlogs_ds)
+```
+
+### Related stores (do not confuse)
+
+| Name | Grafana variable | What it is | Best for |
+|------|------------------|------------|----------|
+| **panopticlogs** | `$panopticlogs_ds` | App stdout/stderr logs in Elasticsearch | Debugging, message text, OperationId / UseCase search |
+| **canonical-log-lines** | `$cll_ds` | Request-shaped / CLL logs in Elasticsearch | Structured request log lines |
+| **SystemEvents** | `$sysevents_ds` | System event stream in Elasticsearch | Platform system events |
+| **Prometheus / VictoriaMetrics** | `$datasource` | Metrics TSDB (PromQL) | RPS, latency, error %, SLOs |
+| **Tempo** | `tracing-${envir}` | Distributed traces | Request waterfall / cross-service correlation |
+
+---
+
+## Log pipeline
 
 ```text
 ILogger / Serilog
     → RenderedCompactJsonFormatter (stdout)
-    → Nomad task stdout scrape
+    → Fluent Bit (Nomad container stdout/stderr scrape)
     → panopticlogs (Elasticsearch)
     → Grafana datasource "panopticlogs" ($panopticlogs_ds)
 ```
+
+Managed dashboards also expose Fluent Bit health for the task (e.g. **% Logs Scraped**): percent of ingested logs that pass through Fluent Bit without being throttled/dropped. Logs can disappear **before** Elasticsearch retention if the collector throttles.
 
 ### 1. App emission (this repo)
 
@@ -35,11 +69,11 @@ Business logs use structured templates, e.g. processor flow context:
 [UseCase={UseCase} SourceType={SourceType} OperationId={OperationId}] {Step}: {detail}
 ```
 
-See `docs/processor-pipeline.md` for the processor log contract.
+See `docs/processor-pipeline.md` in the content-captures repo for the processor log contract.
 
 ### 2. Platform ingest (outside this repo)
 
-Once deployed on Nomad, container stdout is collected by the platform logging stack and indexed into **panopticlogs**. Documents are tagged with Nomad metadata such as:
+Once deployed on Nomad, container stdout/stderr is collected by Fluent Bit and indexed into **panopticlogs**. Documents are tagged with Nomad metadata such as:
 
 | Field | Role |
 |-------|------|
@@ -48,7 +82,17 @@ Once deployed on Nomad, container stdout is collected by the platform logging st
 
 There is no Serilog Elasticsearch sink and no ES URL in service config.
 
-### 3. Grafana consumption
+### 3. Log retention
+
+Retention is **not configured by content-captures**. How long panopticlogs keeps documents is a **platform ILM policy** owned by Telemetry/logging, not by this service.
+
+Notes:
+
+- Exact day count is not defined in this repo; confirm via Telemetry docs / `#Telemetry` / Mosaic, or empirically in Grafana Explore (widen the time range on a `nomad_task_name.keyword:<task>` query until results go empty).
+- Effective availability can be shorter than ILM retention if Fluent Bit throttles/drops logs under load.
+- Metrics retention (VictoriaMetrics) is a separate platform policy and is not the same as panopticlogs retention. Public Roblox observability talks have historically cited on the order of ~15 days for metrics — treat that as background, not a guarantee for logs.
+
+### 4. Grafana consumption (logs)
 
 Each service has a pair of dashboards (prod Grafana):
 
@@ -63,6 +107,7 @@ Managed dashboards already include log panels backed by `$panopticlogs_ds`:
 - Recent log messages
 - Logs landed by level
 - Logs by message template / request path / error type
+- % Logs Scraped / throttling signals (Fluent Bit via `$vm_orchestration`)
 
 Base Lucene query used by those panels:
 
@@ -72,15 +117,9 @@ nomad_task_name.keyword:$env AND log.level_normalized:$log_level
 
 `$env` resolves to the Nomad task name(s) for the selected shard (e.g. `content-captures-api`).
 
-Related Elasticsearch datasources also present on these dashboards:
-
-- `panopticlogs` — application stdout logs (primary)
-- `canonical-log-lines` — CLL / request-shaped logs (`$cll_ds`)
-- `SystemEvents` — system events (`$sysevents_ds`)
-
 Most **custom** panels today are Prometheus metrics (error rates, latency). Log panels live mainly on the **managed** dashboards; add new log charts on the **custom** dashboard.
 
-## How to build a log-based Grafana panel
+### 5. How to build a log-based Grafana panel
 
 1. Open the service **custom** dashboard (do not edit managed).
 2. Add panel → datasource **panopticlogs** (or `$panopticlogs_ds` if the variable exists).
@@ -105,12 +144,14 @@ nomad_task_name.keyword:content-captures-processor AND message:"OperationId=abc-
    - **Time series** — count / rate with date histogram + terms aggregation on `log.level_normalized`, message template, etc.
 5. Prefer filtering on structured message text you control (the `[UseCase=…]` prefix) so queries stay stable.
 
-## Metrics vs logs
+---
+
+## Metrics vs logs vs traces
 
 | Signal | Path | Grafana datasource | Best for |
 |--------|------|--------------------|----------|
 | Metrics | BEDEV2 instrumentation → scrape → VictoriaMetrics (PromQL) | `Prometheus` (`$datasource`) | RPS, latency, error %, SLOs |
-| App logs | stdout → panopticlogs ES | `panopticlogs` | Debugging, message rates, error text |
+| App logs | stdout → Fluent Bit → panopticlogs ES | `panopticlogs` | Debugging, message rates, error text |
 | Traces | Tempo | `tracing-${envir}` | Request waterfall / correlation |
 
 For operational health charts, prefer Prometheus (already on custom dashboards). Use panopticlogs when you need message content or counts of specific log lines.
@@ -293,5 +334,7 @@ Mix of custom counters + framework recording rules is normal.
 - Confirm metrics locally: `curl localhost:5001/metrics` (gRPC) or the HTTP service metrics port and grep for your counter name.
 - In Grafana Explore, pick **panopticlogs**, set time range, query `nomad_task_name.keyword:<task>` before building a log panel.
 - In Grafana Explore, pick **Prometheus**, query `http_server_response_total{task_name=~"content-captures-api"}` before building a metrics panel.
+- To approximate panopticlogs retention: widen Explore’s time range until the query returns no hits.
+- Check **% Logs Scraped** on the managed dashboard if you suspect missing logs (Fluent Bit throttle/drop).
 - Task names may include shard suffixes (`content-captures-api-1`); managed dashboards use `$env` / `$shard` regexes for this.
 - Do not add an Elasticsearch Serilog sink or a custom VictoriaMetrics push client — platform scrape/ingest already covers both paths.
