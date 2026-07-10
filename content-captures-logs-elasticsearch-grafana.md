@@ -1,6 +1,6 @@
-# Content Captures: Logs → Elasticsearch → Grafana
+# Content Captures: Logs, Metrics → Grafana
 
-How backend logs from the content-captures services reach Elasticsearch and how to build Grafana panels on them.
+How backend logs reach Elasticsearch (panopticlogs) and how metrics flow through BEDEV2 instrumentation → VictoriaMetrics / Prometheus into Grafana.
 
 ## Short answer
 
@@ -109,15 +109,189 @@ nomad_task_name.keyword:content-captures-processor AND message:"OperationId=abc-
 
 | Signal | Path | Grafana datasource | Best for |
 |--------|------|--------------------|----------|
-| Metrics | BEDEV2 instrumentation → Prometheus/VictoriaMetrics | `Prometheus` (`$datasource`) | RPS, latency, error %, SLOs |
+| Metrics | BEDEV2 instrumentation → scrape → VictoriaMetrics (PromQL) | `Prometheus` (`$datasource`) | RPS, latency, error %, SLOs |
 | App logs | stdout → panopticlogs ES | `panopticlogs` | Debugging, message rates, error text |
 | Traces | Tempo | `tracing-${envir}` | Request waterfall / correlation |
 
 For operational health charts, prefer Prometheus (already on custom dashboards). Use panopticlogs when you need message content or counts of specific log lines.
 
+---
+
+## Metrics in detail: BEDEV2 → Prometheus / VictoriaMetrics
+
+### Short answer
+
+Services expose a Prometheus text scrape endpoint (`/metrics`). The platform scrapes each Nomad allocation, stores series in **VictoriaMetrics**, and Grafana queries that store through a datasource typed as **Prometheus** (`$datasource`). Apps do not push metrics to Grafana or VictoriaMetrics directly.
+
+```text
+BEDEV2 middleware / prometheus-net counters
+    → HTTP GET /metrics (Prometheus exposition format)
+    → platform scrape (per Nomad allocation)
+    → VictoriaMetrics (central TSDB)
+    → Grafana PromQL via datasource "Prometheus" ($datasource)
+```
+
+Roblox’s centralized observability stack uses VictoriaMetrics as the metrics backend and Grafana as the UI ([Grafana Labs write-up](https://grafana.com/blog/multiple-players-one-stack-inside-robloxs-centralized-observability-stack/)). In dashboards the datasource still appears as “Prometheus” because VictoriaMetrics speaks PromQL.
+
+### 1. Emission inside the process
+
+There are **two layers** of metrics.
+
+#### A. Automatic BEDEV2 framework metrics (no app code)
+
+Enabled by the service defaults in `Startup.cs`:
+
+| Service | Registration | What gets instrumented |
+|---------|--------------|------------------------|
+| `content-captures-api` | `AddBEDEV2HttpServiceDefaults` + `UseBEDEV2HttpServiceDefaults` | Incoming HTTP server RPS, status codes, latency; ACL middleware |
+| `content-captures` | `AddBEDEV2GrpcServiceDefaults` + `UseBEDEV2GrpcServiceDefaults` | Incoming gRPC server started/handled, latency |
+| `content-captures-processor` | `AddBEDEV2SqsProcessorDefaults` + `UseBEDEV2SqsProcessorDefaults` | SQS reader/client metrics; outbound HTTP/gRPC clients |
+| All | `AddBEDEV2GrpcClient<T>()` / HTTP clients | Outbound client RPS, errors, latency, circuit breakers |
+
+These produce standard series such as:
+
+| Metric (raw counter) | Meaning |
+|----------------------|---------|
+| `http_server_requests_total` | Incoming HTTP requests |
+| `http_server_response_total` | Incoming HTTP responses (labels include `Endpoint`, `StatusCode`) |
+| `grpc_server_started_total` | Incoming gRPC RPCs started |
+| Client equivalents | `http_client_*`, `grpc_client_*` |
+
+Common labels after scrape enrichment:
+
+| Label | Example | Role |
+|-------|---------|------|
+| `task_name` | `content-captures-api` | Nomad task / service identity (dashboard `$env`) |
+| `region` | `chi1`, … | Deployment region (`$region`) |
+| `Endpoint` | `Moments.GetMoments`, `ContentCaptures.UploadCaptureWithAsset` | Controller/RPC name |
+| `StatusCode` | `200`, `500` | HTTP status (server metrics) |
+| `cell_id`, `cell_node_group`, `deployment_type` | … | Capacity / topology filters on managed dashboards |
+
+Managed dashboards also use **recording rules** (pre-aggregated rates), e.g.:
+
+- `task:http_server_requests:rate1m`
+- `task:ok_http_server_response:rate1m`
+- `task:grpc_server_started:rate1m`
+
+Panels often query both the recording rule and the raw `rate(...[1m])` form for compatibility.
+
+#### B. Custom business counters (`prometheus-net`)
+
+App code creates named counters with `Metrics.CreateCounter(...)` and increments them on business outcomes. Examples in this repo:
+
+| Metric name | Where | Labels / meaning |
+|-------------|-------|------------------|
+| `content_captures_api_sign_capture` | API `ContentCapturesController` | Sign-capture request count |
+| `content_captures_api_counter` | API | `Method`, `UniverseId` for developer/upload paths |
+| `cross_experience_post` | Processor | `status` = success/failure for moment posts |
+| `captured_asset_metadata_validation` | Processor | `result` = present_valid / present_invalid / missing / … |
+| `cross_experience_posting_description_textfiltered` | Processor | Description removed by text filter |
+| IXP counters | gRPC + processor `MomentsExperimentProvider` | Layer / outcome labels |
+
+Example:
+
+```csharp
+_ContentCapturesApiCounter = Metrics.CreateCounter(
+    "content_captures_api_counter",
+    "Number of requests to content captures api endpoints used by developer apis",
+    new[] { "Method", "UniverseId" });
+
+_ContentCapturesApiCounter.WithLabels("upload_capture_with_asset", uploadUniverseId.ToString()).Inc();
+```
+
+These appear on the same `/metrics` scrape as framework metrics. Prefer low-cardinality labels (enums, coarse IDs); avoid unbounded strings (full operation UUIDs, free-text).
+
+Local check (gRPC service README): Prometheus metrics on **port 5001** at `/metrics`.
+
+### 2. Scrape and storage (platform)
+
+1. Each allocation exposes `/metrics` (BEDEV2 wires the prometheus-net metric server).
+2. The platform scrape agent pulls on an interval and attaches Nomad labels (`task_name`, `region`, …).
+3. Samples land in **VictoriaMetrics** (central TSDB).
+4. Grafana’s `Prometheus` datasource points at that store; PromQL works as usual.
+
+You do not configure VictoriaMetrics URLs in the service. Deployment + service-descriptor tags (`bedev2`, `type:http-service`, etc.) are enough for managed dashboards/alerts to discover the task.
+
+### 3. Grafana: managed vs custom
+
+**Managed** (`*-managed`, auto-generated, do not edit):
+
+- Standard HTTP/gRPC/SQS/ACL/runtime panels
+- Tags like `http_server`, `grpc_client`, `sqs_reader`, `platform-managed`
+- Datasource variable `$datasource` → Prometheus
+- Filter variables: `$envir`, `$env` / `$shard` (task_name), `$region`, …
+
+Example managed PromQL (HTTP 2xx rate):
+
+```promql
+sum(rate(http_server_response_total{
+  task_name=~"$env",
+  region=~"$region",
+  StatusCode=~"2.*",
+  Endpoint!="Unknown"
+}[1m])) by (StatusCode)
+```
+
+**Custom** (`*-custom`, team-owned):
+
+- Product-specific charts (feed error %, upload error %, business counters)
+- Same `$datasource` / `$env` pattern
+- Example from `content-captures-api-custom` — Moments feed 5xx rate:
+
+```promql
+sum(rate(http_server_response_total{
+  task_name=~"$env",
+  Endpoint="Moments.GetMomentRecommendations",
+  StatusCode=~"5.."
+}[5m]))
+/
+sum(rate(http_server_response_total{
+  task_name=~"$env",
+  Endpoint="Moments.GetMomentRecommendations"
+}[5m]))
+* 100
+```
+
+### 4. Alerts
+
+Repo alerts under `alerts/<env>/` are Prometheus rules evaluated against the same metric store. Example (`alerts/production/content-captures-content-captures-api-alerts.yml`):
+
+```promql
+(sum(rate(content_captures_api_ams_missing_signature[1m]))
+ / sum(task:http_server_requests:rate1m{
+     task_name=~"content-captures-api",
+     Endpoint="ContentCaptures.RegisterCapture"
+   })) * 100 > 5
+```
+
+Mix of custom counters + framework recording rules is normal.
+
+### 5. How to add a metrics panel
+
+1. Prefer **custom** dashboard for new charts.
+2. Datasource: **Prometheus** / `$datasource`.
+3. Always scope with `task_name=~"$env"` (and `$region` when useful).
+4. Use `rate`/`increase` on counters; never graph raw counter values for RPS.
+5. For endpoint health, filter `Endpoint="Controller.Action"` and `StatusCode=~"5.."`.
+6. For business outcomes, query your `Metrics.CreateCounter` name + labels.
+7. Validate locally: hit `/metrics` and confirm the series name/labels before shipping a panel.
+
+### 6. When to use metrics vs logs
+
+| Need | Use |
+|------|-----|
+| Error rate, latency SLO, RPS by endpoint | Metrics (`http_server_response_total`, …) |
+| Count of “metadata validation failed” / IXP outcomes | Custom counters |
+| Why a specific `OperationId` failed | Logs (panopticlogs) |
+| Request waterfall across services | Traces (Tempo) |
+
+---
+
 ## Practical tips
 
 - Confirm logs locally first: `swarp run <service>` and watch JSON stdout.
-- In Grafana Explore, pick **panopticlogs**, set time range, query `nomad_task_name.keyword:<task>` before building a panel.
+- Confirm metrics locally: `curl localhost:5001/metrics` (gRPC) or the HTTP service metrics port and grep for your counter name.
+- In Grafana Explore, pick **panopticlogs**, set time range, query `nomad_task_name.keyword:<task>` before building a log panel.
+- In Grafana Explore, pick **Prometheus**, query `http_server_response_total{task_name=~"content-captures-api"}` before building a metrics panel.
 - Task names may include shard suffixes (`content-captures-api-1`); managed dashboards use `$env` / `$shard` regexes for this.
-- Do not add an Elasticsearch Serilog sink to the app — platform ingest already covers it.
+- Do not add an Elasticsearch Serilog sink or a custom VictoriaMetrics push client — platform scrape/ingest already covers both paths.
