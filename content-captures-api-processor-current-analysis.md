@@ -12,14 +12,13 @@ Separating `content-captures-api` from `content-captures-processor` is architect
 
 The main issue is not the existence of a processor. It is that one processor handler has become the workflow engine for several use cases. `ContentCaptureEventHandler.cs` is 1,398 lines, has more than ten injected dependencies, and performs routing, polling, validation, permission grants, content filtering, feed registration, DataStore writes, status persistence, notifications, and compatibility handling.
 
-The most urgent integration issue is a status-contract mismatch:
-
-- Creator Hub calls `contentCapturesCreateInfluencerMomentFromVideo`, receives an `operationId`, and polls `contentCapturesCheckUploadStatus` up to 60 times.
-- `ProcessInfluencerMomentPublishAsync` explicitly invokes the shared core with `storeClientUploadResult: false`.
-- `check-upload-status` reads the upload result that the processor persists through `StoreRobloxCapturedAssetUploadResultAsync`.
-- Therefore the influencer path does not naturally write the state that Creator Hub is waiting for. Publishing the Moment and sending a notification do not make that status endpoint return `Found`.
-
-This should be fixed before larger architectural work.
+Correction after refreshing `creator-hub` `origin/master`: the latest Creator Hub no longer polls
+`contentCapturesCheckUploadStatus` after an influencer upload. It returns after
+`contentCapturesCreateInfluencerMomentFromVideo` supplies the `operationId` and `momentId`.
+The earlier polling behavior exists on the stale local feature branch but was subsequently removed
+from `master`. Therefore the processor's `storeClientUploadResult: false` policy for
+`InfluencerMomentPublish` is consistent with the latest frontend and is not a current broken
+integration contract.
 
 ## 1. Current service boundaries
 
@@ -75,9 +74,8 @@ The processor therefore behaves as an application workflow orchestrator, not a s
 4. The API extracts an asynchronous upload operation ID, generates the Moment ID, and sends `InfluencerMomentPublish` to SQS.
 5. The processor polls `v1/operations/{operationId}` until the asset ID is available.
 6. It polls moderation, grants permissions, filters metadata, registers the feed item, writes the Moment, and sends a result notification.
-7. Creator Hub separately polls `check-upload-status` using the operation ID.
-
-Step 7 is not connected to a status write in the influencer processor path.
+7. Creator Hub returns from its publish action without polling `check-upload-status`; later Moment
+   list refreshes and result notifications are the available completion channels.
 
 ### In-experience flow
 
@@ -114,17 +112,16 @@ Moderated or failed uploads hide the asset ID before storing a developer-facing 
 
 ## 4. Main risks
 
-### P0/P1: inconsistent completion contract
+### Product semantics: submission versus completion
 
-Creator Hub polls a status store that `InfluencerMomentPublish` does not update. This is a concrete cross-repository contract defect, not only an architectural preference.
+The latest Creator Hub treats a successful create response as successful submission and does not
+wait for processor completion. This is internally consistent, but the UI must not describe that
+moment as fully published until the asynchronous result is observed through a later list refresh or
+notification.
 
-Recommended immediate choices:
-
-1. Persist a unified influencer publish result under the returned operation/correlation ID; or
-2. Make Creator Hub query Moment publish state by the returned `momentId`; or
-3. Expose/consume the existing success/failure notification as the completion signal.
-
-The first option is the smallest conceptual change if `check-upload-status` is intended to remain the canonical contract, but its model should distinguish `Pending`, `Succeeded`, `Moderated`, and `Failed` rather than only `Found`/`NotFound`.
+If product requirements later call for visible progress, introduce a dedicated publish-operation
+contract with `Pending`, `Succeeded`, `Moderated`, and `Failed` states. Do not reuse the capture
+upload `Found`/`NotFound` contract without clarifying its semantics.
 
 ### P1: blocking polling consumes SQS concurrency
 
@@ -205,7 +202,7 @@ Compatibility code should have a measured removal condition based on maximum que
 1. Define one publish-operation model:
    `Accepted → Uploading/Transcoding → Moderating → Publishing → Succeeded/Rejected/Failed`.
 2. Persist every transition by correlation ID.
-3. Correct Creator Hub to use that contract.
+3. Use that contract in Creator Hub only if the product needs asynchronous progress or terminal status.
 4. Add an idempotency key to feed and DataStore writes.
 5. Verify SQS exception/deletion semantics and configure a DLQ.
 6. Remove static AWS access-key construction from the API in favor of the standard credential chain/IAM role.
@@ -246,16 +243,16 @@ Have the API initiate multipart upload and return pre-signed URLs. Creator Hub u
 
 ### Phase 5: adopt a workflow engine only if justified
 
-Temporal, Step Functions, or another durable orchestrator becomes worthwhile if the number of steps, retries, timers, compensations, and cross-team events keeps growing. It should not be the first move; the status-contract defect and handler decomposition can be fixed with the existing stack.
+Temporal, Step Functions, or another durable orchestrator becomes worthwhile if the number of steps, retries, timers, compensations, and cross-team events keeps growing. It should not be the first move; handler decomposition and explicit operation semantics can be implemented with the existing stack.
 
 ## Bottom line
 
-The API/processor split itself is sound. The current design problem is that the queue consumer has become a long-lived, poll-driven workflow engine with implicit state and mixed completion contracts.
+The API/processor split itself is sound. The current design problem is that the queue consumer has become a long-lived, poll-driven workflow engine with implicit state and mixed per-use-case completion semantics.
 
 The highest-return sequence is:
 
-1. repair the Creator Hub completion contract;
-2. establish idempotent, terminal operation states;
+1. clarify whether Creator Hub reports task submission or terminal publication;
+2. establish idempotent, terminal operation states where product requirements need them;
 3. split the handler into typed use cases and activities;
 4. replace in-handler waits with event or delayed-message continuations;
 5. move large video bytes to direct upload.
