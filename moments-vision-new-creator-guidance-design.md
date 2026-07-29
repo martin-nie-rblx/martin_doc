@@ -23,6 +23,8 @@ Keep the feature isolated from the existing creation implementation:
 
 - `js/new-creator.js` owns DOM construction, state, navigation, and cleanup.
 - `css/new-creator.css` owns the mobile portrait presentation.
+- The same module and stylesheet also own the post-guidance RIVALS entry sheet;
+  no separate bottom-sheet abstraction is introduced for this prototype.
 - `window.NewCreatorFlow.open()` provides the integration point used by the
   existing menu in `js/create.js`.
 - `index.html` loads the new stylesheet and script using the repository's
@@ -48,10 +50,31 @@ Navigation behavior:
 - **Continue** advances from screen 2 to 3 and from screen 3 to 4.
 - **Back** on screen 3 returns to screen 2.
 - **Back** on screen 4 returns to screen 3.
-- **Done** on screen 4 returns to the Moments feed.
+- **Go Capture** on screen 4 returns to the Moments feed and immediately opens
+  the RIVALS game-intro sheet.
 - **Back** on screen 1 returns to the Moments feed.
 - The top-right close button on every screen returns to the Moments feed.
 - The existing bottom navigation stays visible with Moments selected.
+
+Ordinary close and Back paths never open the game-intro sheet. The
+`go-capture` action is distinct from the shared close action so this behavior
+cannot be triggered accidentally.
+
+## RIVALS Entry Sheet
+
+After **Go Capture**, a scrim darkens the Moments feed and a bottom sheet opens
+immediately. The sheet follows the supplied reference and contains:
+
+- the existing local RIVALS game thumbnail;
+- title **RIVALS**;
+- creator **Nosniy Games** with a verified badge;
+- **Maturity: Mild**;
+- **93%** rating;
+- a full-width blue Play button.
+
+The Play button dismisses the sheet and leaves the user on the Moments feed.
+Escape also dismisses it for keyboard accessibility. Tapping the backdrop does
+not dismiss it. The entry sheet is mobile-portrait only.
 
 ## Visual Design
 
@@ -59,6 +82,8 @@ Navigation behavior:
 - Follow the dark Roblox visual treatment shown in the references.
 - Recreate typography, spacing, buttons, pagination dots, and bottom
   navigation as HTML/CSS.
+- Match the supplied RIVALS reference for the scrim, rounded top corners,
+  drag handle, metadata rows, and Play button.
 - Use the supplied references as the visual source of truth.
 - Do not introduce landscape or desktop variants.
 
@@ -70,13 +95,19 @@ Navigation behavior:
 - Maintain one explicit current-screen state in `new-creator.js`.
 - Closing or completing the flow resets it so the next launch starts at
   screen 1.
+- Track the guidance and RIVALS sheet as separate visible states.
+- Return focus appropriately when either surface closes.
 
 ## Verification
 
 - Confirm the menu shows **New Creator** last with the Capture icon.
 - Confirm filename-order navigation: 1 to 2 to 3 to 4.
-- Verify all Continue, Back, Done, and close paths.
-- Confirm Done returns to the Moments feed.
+- Verify all Continue, Back, Go Capture, and close paths.
+- Confirm Go Capture returns to the feed and immediately opens the RIVALS
+  sheet.
+- Confirm Back and close paths do not open the RIVALS sheet.
+- Confirm Play and Escape dismiss the RIVALS sheet.
+- Confirm backdrop taps do not dismiss it.
 - Confirm relaunching starts at screen 1.
 - Confirm existing Gallery and other plus-menu actions are unchanged.
 - Confirm the flow is limited to mobile portrait.
