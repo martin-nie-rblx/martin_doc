@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a mobile-portrait New Creator entry to the Moments plus menu that opens a four-screen Capture library and guidance flow matching the supplied references.
+**Goal:** Add a mobile-portrait New Creator entry to the Moments plus menu that opens a four-screen Capture library and guidance flow, then offers RIVALS as the game-entry destination after Go Capture.
 
 **Architecture:** A focused `js/new-creator.js` module builds and controls the overlay and exposes `window.NewCreatorFlow.open()`. A focused `css/new-creator.css` stylesheet owns the presentation. The existing create menu only adds the final menu item and delegates opening to the new module.
 
@@ -572,3 +572,255 @@ git diff --check
 
 Expected: tests PASS, syntax checks exit 0, and `git diff --check` prints no
 errors.
+
+### Task 6: Add Go Capture and the RIVALS Entry Sheet
+
+**Files:**
+- Modify: `tests/new-creator.test.js`
+- Modify: `js/new-creator.js`
+- Modify: `css/new-creator.css`
+- Modify cache version: `index.html`
+
+- [ ] **Step 1: Add failing descriptor and DOM behavior tests**
+
+Update the capture-screen descriptor expectation so its primary action is:
+
+```js
+{ label: 'Go Capture', action: 'go-capture', kind: 'primary' }
+```
+
+Extend the existing dependency-free VM/fake-DOM tests to exercise the real
+browser branch:
+
+```js
+test('Go Capture closes guidance and immediately opens RIVALS entry', () => {
+  const env = createBrowserEnvironment();
+  env.window.NewCreatorFlow.open();
+  env.advanceTo('capture');
+  env.clickAction('go-capture');
+
+  assert.equal(env.guidance.getAttribute('aria-hidden'), 'true');
+  assert.equal(env.gameEntry.getAttribute('aria-hidden'), 'false');
+  assert.equal(env.gameEntry.querySelector('.new-creator-game__title').textContent, 'RIVALS');
+  assert.equal(env.document.activeElement, env.gameEntry.querySelector('.new-creator-game__play'));
+});
+
+test('ordinary guidance close does not open RIVALS entry', () => {
+  const env = createBrowserEnvironment();
+  env.window.NewCreatorFlow.open();
+  env.clickAction('close');
+
+  assert.equal(env.guidance.getAttribute('aria-hidden'), 'true');
+  assert.equal(env.gameEntry, null);
+});
+
+test('Play dismisses RIVALS entry and returns focus', () => {
+  const env = createBrowserEnvironment();
+  env.openGameEntryFromCapture();
+  env.gameEntry.querySelector('.new-creator-game__play').click();
+
+  assert.equal(env.gameEntry.getAttribute('aria-hidden'), 'true');
+  assert.equal(env.document.activeElement, env.preOpenFocus);
+});
+
+test('Escape dismisses RIVALS entry', () => {
+  const env = createBrowserEnvironment();
+  env.openGameEntryFromCapture();
+  env.pressEscape();
+
+  assert.equal(env.gameEntry.getAttribute('aria-hidden'), 'true');
+});
+
+test('game-entry backdrop does not dismiss the sheet', () => {
+  const env = createBrowserEnvironment();
+  env.openGameEntryFromCapture();
+  env.gameEntry.querySelector('.new-creator-game__scrim').click();
+
+  assert.equal(env.gameEntry.getAttribute('aria-hidden'), 'false');
+});
+
+test('incompatible device changes dismiss RIVALS entry', () => {
+  const env = createBrowserEnvironment();
+  env.openGameEntryFromCapture();
+  env.changeDevice('desktop');
+
+  assert.equal(env.gameEntry.getAttribute('aria-hidden'), 'true');
+});
+```
+
+- [ ] **Step 2: Run the focused tests and verify RED**
+
+Run:
+
+```bash
+node --test --test-name-pattern="Go Capture|RIVALS|Play|backdrop|device changes" tests/new-creator.test.js
+```
+
+Expected: FAIL because the capture descriptor still says Done/close and the
+RIVALS sheet does not exist.
+
+- [ ] **Step 3: Change the final guidance action**
+
+In `screens.capture.actions`, replace the primary descriptor with:
+
+```js
+Object.freeze({ label: 'Go Capture', action: 'go-capture', kind: 'primary' })
+```
+
+Handle it separately from ordinary close:
+
+```js
+if (action === 'go-capture') {
+  close({ restoreFocus: false });
+  openGameEntry();
+  return;
+}
+```
+
+Allow `close()` to suppress focus restoration during this handoff while
+preserving all existing close behavior by default:
+
+```js
+function close(options = {}) {
+  const restoreFocus = options.restoreFocus !== false;
+  // Existing close/reset work.
+  if (restoreFocus) restorePreviousFocus();
+}
+```
+
+- [ ] **Step 4: Build the RIVALS entry DOM**
+
+Add lazy `buildGameEntry(targetFrame)`, `openGameEntry()`, and
+`closeGameEntry()` functions in `js/new-creator.js`.
+
+The root is a non-modal section appended to `.phone-frame`:
+
+```html
+<section class="new-creator-game" role="dialog"
+         aria-label="RIVALS game intro" aria-hidden="true">
+  <div class="new-creator-game__scrim" aria-hidden="true"></div>
+  <div class="new-creator-game__sheet">
+    <span class="new-creator-game__handle" aria-hidden="true"></span>
+    <div class="new-creator-game__identity">
+      <img class="new-creator-game__thumb"
+           src="assets/images/Game%20profile/rivals.webp?v=1" alt="">
+      <div>
+        <h2 class="new-creator-game__title">RIVALS</h2>
+        <p class="new-creator-game__creator">
+          Nosniy Games
+          <span class="new-creator-game__verified" aria-label="Verified">✓</span>
+        </p>
+      </div>
+    </div>
+    <div class="new-creator-game__meta">
+      <span>Maturity: Mild</span>
+      <span aria-label="93 percent approval">👍 93%</span>
+    </div>
+    <button type="button" class="new-creator-game__play"
+            aria-label="Play RIVALS">▶</button>
+  </div>
+</section>
+```
+
+Behavior requirements:
+
+- `openGameEntry()` is mobile-portrait only, opens immediately after the
+  guidance closes, sets `aria-hidden="false"`, and focuses Play.
+- Play calls `closeGameEntry()`; the scrim has no dismissal handler.
+- `closeGameEntry()` hides the sheet and restores the focus saved before the
+  New Creator flow opened.
+- Escape prioritizes closing the RIVALS entry before checking guidance.
+- Device configuration, resize, and orientation reconciliation close either
+  open surface.
+- Ordinary Back/close paths never call `openGameEntry()`.
+
+- [ ] **Step 5: Style the scrim and bottom sheet**
+
+Append scoped rules to `css/new-creator.css`:
+
+```css
+.new-creator-game {
+  position: absolute;
+  inset: 0;
+  z-index: 165;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.new-creator-game.is-open {
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.new-creator-game__scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.68);
+  opacity: 0;
+  transition: opacity 180ms ease;
+}
+
+.new-creator-game__sheet {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  min-height: 292px;
+  padding: 10px 20px 22px;
+  border-radius: 20px 20px 0 0;
+  background: #1b1c20;
+  transform: translateY(100%);
+  transition: transform 280ms cubic-bezier(.22,.61,.36,1);
+}
+
+.new-creator-game.is-open .new-creator-game__scrim { opacity: 1; }
+.new-creator-game.is-open .new-creator-game__sheet { transform: translateY(0); }
+```
+
+Complete the scoped rules to match the supplied reference:
+
+- centered 40 x 4 drag handle;
+- 56 x 56 rounded RIVALS thumbnail;
+- 20px bold title and 15px muted creator;
+- small blue verified badge;
+- dark pill metadata chips;
+- full-width 48px Roblox-blue Play button near the sheet bottom;
+- focus-visible ring and reduced-motion overrides;
+- `.phone-frame.is-landscape .new-creator-game { display: none; }`.
+
+Do not modify shared feed/player CSS.
+
+- [ ] **Step 6: Bump the cache version**
+
+In `index.html`, increment only:
+
+```html
+<link rel="stylesheet" href="css/new-creator.css?v=2" />
+<script src="js/new-creator.js?v=2" defer></script>
+```
+
+- [ ] **Step 7: Run automated verification**
+
+Run:
+
+```bash
+node --test tests/new-creator.test.js
+node --check js/new-creator.js
+node --check js/create.js
+git diff --check
+```
+
+Expected: all tests PASS, syntax checks exit 0, and no whitespace errors.
+
+- [ ] **Step 8: Browser verification**
+
+Serve the isolated feature worktree on an unused port and verify:
+
+1. Final guidance CTA reads **Go Capture**.
+2. It returns to the Moments feed and immediately opens the RIVALS sheet.
+3. The sheet matches the supplied reference at 393 x 852.
+4. Play and Escape dismiss it.
+5. Back, X, and library Back never open it.
+6. Backdrop taps do not dismiss it.
+7. Desktop/landscape switches close or prevent the sheet.
+8. Browser console has no errors.
