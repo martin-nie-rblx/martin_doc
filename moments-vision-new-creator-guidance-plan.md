@@ -824,3 +824,202 @@ Serve the isolated feature worktree on an unused port and verify:
 6. Backdrop taps do not dismiss it.
 7. Desktop/landscape switches close or prevent the sheet.
 8. Browser console has no errors.
+
+### Task 7: Pause Feed Under RIVALS and Dismiss from the Backdrop
+
+This task supersedes Task 6's original non-dismissing backdrop behavior.
+
+**Files:**
+- Modify: `tests/new-creator.test.js`
+- Modify: `js/app.js`
+- Modify: `js/new-creator.js`
+- Modify cache versions: `index.html`
+
+- [ ] **Step 1: Add failing playback and dismissal tests**
+
+Extend the existing VM/fake-DOM browser harness with spies for:
+
+```js
+window.pauseMomentPlayback = () => calls.push('pause');
+window.startMomentPlayback = () => calls.push('resume');
+```
+
+Add independent behavior tests:
+
+```js
+test('RIVALS pauses playback before becoming visible', () => {
+  const env = createBrowserEnvironment();
+  env.openGameEntryFromCapture();
+
+  assert.deepEqual(env.playbackCalls, ['pause']);
+  assert.equal(env.gameEntry.classList.contains('is-open'), true);
+});
+
+test('backdrop dismisses RIVALS and resumes playback', () => {
+  const env = createBrowserEnvironment();
+  env.openGameEntryFromCapture();
+  env.gameEntry.querySelector('.new-creator-game__scrim').click();
+
+  assert.equal(env.gameEntry.classList.contains('is-open'), false);
+  assert.deepEqual(env.playbackCalls, ['pause', 'resume']);
+});
+
+test('Play and Escape dismiss RIVALS and resume playback', () => {
+  for (const dismiss of ['play', 'escape']) {
+    const env = createBrowserEnvironment();
+    env.openGameEntryFromCapture();
+    env.dismissGameEntry(dismiss);
+
+    assert.equal(env.gameEntry.classList.contains('is-open'), false);
+    assert.deepEqual(env.playbackCalls, ['pause', 'resume']);
+  }
+});
+
+test('clicking inside the RIVALS sheet does not dismiss or resume', () => {
+  const env = createBrowserEnvironment();
+  env.openGameEntryFromCapture();
+  env.gameEntry.querySelector('.new-creator-game-entry__sheet').click();
+
+  assert.equal(env.gameEntry.classList.contains('is-open'), true);
+  assert.deepEqual(env.playbackCalls, ['pause']);
+});
+
+test('device and orientation cleanup does not resume playback', () => {
+  for (const cleanup of ['desktop', 'landscape', 'hidden']) {
+    const env = createBrowserEnvironment();
+    env.openGameEntryFromCapture();
+    env.runLifecycleCleanup(cleanup);
+
+    assert.equal(env.gameEntry.classList.contains('is-open'), false);
+    assert.deepEqual(env.playbackCalls, ['pause']);
+  }
+});
+```
+
+Add a source integration test requiring the updated cache versions:
+
+```js
+assert.match(index, /js\/app\.js\?v=348/);
+assert.match(index, /js\/new-creator\.js\?v=3/);
+```
+
+- [ ] **Step 2: Run focused tests and verify RED**
+
+Run:
+
+```bash
+node --test --test-name-pattern="pauses playback|resumes playback|inside the RIVALS|cleanup does not resume|cache" tests/new-creator.test.js
+```
+
+Expected: FAIL because no pause API exists, the backdrop is not a dismiss
+target, and the script versions are unchanged.
+
+- [ ] **Step 3: Add the player pause API**
+
+Beside the existing `window.startMomentPlayback` implementation in
+`js/app.js`, add:
+
+```js
+window.pauseMomentPlayback = function () {
+  const video = slVideos[currentSlide];
+  if (video) video.pause();
+  syncFeedAudio();
+};
+```
+
+This pauses only the active Moment and keeps feed audio state synchronized.
+
+- [ ] **Step 4: Separate user dismissal from lifecycle cleanup**
+
+Change the game-entry close path in `js/new-creator.js` to accept explicit
+options:
+
+```js
+function closeGameEntry(options) {
+  const settings = options || {};
+  const restoreFocus = settings.restoreFocus !== false;
+  const resumePlayback = settings.resumePlayback === true;
+
+  // Existing hide, aria, class, inert-restoration work.
+
+  if (resumePlayback && typeof window.startMomentPlayback === 'function') {
+    window.startMomentPlayback();
+  }
+  if (restoreFocus) restorePreviousFocus();
+}
+```
+
+Call `window.pauseMomentPlayback()` inside `openGameEntry()` immediately before
+adding the open class:
+
+```js
+if (typeof window.pauseMomentPlayback === 'function') {
+  window.pauseMomentPlayback();
+}
+```
+
+Route dismissals as follows:
+
+- Play: `closeGameEntry({ restoreFocus: true, resumePlayback: true })`
+- Escape: `closeGameEntry({ restoreFocus: true, resumePlayback: true })`
+- Scrim: `closeGameEntry({ restoreFocus: true, resumePlayback: true })`
+- Device, resize, and orientation cleanup:
+  `closeGameEntry({ restoreFocus: true, resumePlayback: false })`
+- Public cleanup remains non-resuming unless explicitly user-triggered.
+
+- [ ] **Step 5: Make only the backdrop dismiss**
+
+Give the scrim an explicit action:
+
+```js
+scrim.dataset.newCreatorGameAction = 'dismiss';
+```
+
+Extend `handleGameEntryAction`:
+
+```js
+if (action === 'play' || action === 'dismiss') {
+  closeGameEntry({ restoreFocus: true, resumePlayback: true });
+}
+```
+
+The sheet has no dismiss action. Event delegation therefore leaves clicks
+inside the card untouched.
+
+- [ ] **Step 6: Bump script cache versions**
+
+Increment only the modified script references in `index.html`:
+
+```html
+<script src="js/app.js?v=348" type="module"></script>
+<script src="js/new-creator.js?v=3" defer></script>
+```
+
+- [ ] **Step 7: Run automated verification**
+
+Run:
+
+```bash
+node --test tests/new-creator.test.js
+node --check js/app.js
+node --check js/new-creator.js
+node --check js/create.js
+node --check js/home.js
+git diff --check
+```
+
+Expected: all tests PASS, syntax checks exit 0, and no whitespace errors.
+
+- [ ] **Step 8: Verify in a real browser**
+
+At the 393 x 852 mobile portrait:
+
+1. Start a playing Moment and open New Creator.
+2. Complete the guidance and select **Go Capture**.
+3. Confirm the Moment is visibly paused under the RIVALS sheet.
+4. Tap inside the sheet; it remains open and the Moment stays paused.
+5. Tap the backdrop; the sheet closes and playback resumes.
+6. Repeat with Play and Escape; both resume playback.
+7. Open the sheet and switch device/orientation; it closes without restarting
+   playback.
+8. Confirm the browser console has no new exceptions.
