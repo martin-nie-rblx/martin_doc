@@ -72,9 +72,13 @@ immediately. The sheet follows the supplied reference and contains:
 - **93%** rating;
 - a full-width blue Play button.
 
-The Play button dismisses the sheet and leaves the user on the Moments feed.
-Escape also dismisses it for keyboard accessibility. Tapping the backdrop does
-not dismiss it. The entry sheet is mobile-portrait only.
+Opening the sheet pauses the active Moment video. The Play button, Escape, and
+a tap on the dark backdrop outside the sheet each dismiss the sheet and resume
+playback. Taps inside the sheet do not dismiss it unless they activate Play.
+The entry sheet is mobile-portrait only.
+
+Device and orientation changes close the sheet without resuming playback,
+because the user is leaving the mobile-portrait Moments view.
 
 ## Visual Design
 
@@ -97,6 +101,11 @@ not dismiss it. The entry sheet is mobile-portrait only.
   screen 1.
 - Track the guidance and RIVALS sheet as separate visible states.
 - Return focus appropriately when either surface closes.
+- Add `window.pauseMomentPlayback()` beside the existing
+  `window.startMomentPlayback()` player API.
+- Pause only the active Moment when the RIVALS sheet opens.
+- Distinguish user dismissal, which resumes playback, from lifecycle cleanup,
+  which leaves playback paused.
 
 ## Verification
 
@@ -106,8 +115,11 @@ not dismiss it. The entry sheet is mobile-portrait only.
 - Confirm Go Capture returns to the feed and immediately opens the RIVALS
   sheet.
 - Confirm Back and close paths do not open the RIVALS sheet.
-- Confirm Play and Escape dismiss the RIVALS sheet.
-- Confirm backdrop taps do not dismiss it.
+- Confirm opening RIVALS pauses the active Moment before the sheet appears.
+- Confirm Play, Escape, and backdrop taps dismiss the RIVALS sheet and resume
+  playback.
+- Confirm taps inside the sheet do not dismiss it.
+- Confirm device and orientation cleanup closes the sheet without resuming.
 - Confirm relaunching starts at screen 1.
 - Confirm existing Gallery and other plus-menu actions are unchanged.
 - Confirm the flow is limited to mobile portrait.
